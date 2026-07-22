@@ -1,0 +1,32 @@
+experiment:
+  name: "uncertainty_dualbranchnafnet_run"
+  seed: 42
+  project: "Multimodal-change-detection"
+  entity: "JfGuerrero"
+  output_dir: "checkpoints"
+
+model:
+  name: "dualbranchnafnet"         # choices: ["unet", "nafnet", "dualbranchunet", "dualbranchnafnet"]
+  activation: "silu"               # choices: ["relu", "leakyrelu", "silu"]
+  interpolation_mode: "Bilinear"   # choices: ["Bilinear", "ConvTranspose2d"]
+  width: 64
+  enc_blk_nums: [1, 2, 4, 8]
+  middle_blk_num: 12
+  dec_blk_nums: [1, 1, 1, 1]
+  final_op: "identity"             # choices: ["identity", "abs", "softplus", "square"]
+  drop_out_rate: 0.0
+  load_model: null                 # chemin vers un .pth si reprise d'entraînement, sinon null
+
+data:
+  task: "uncertainty"
+  batch_size: 8
+  num_workers: 4
+
+training:
+  epochs: 100
+  lr: 0.0001
+  loss_type: "l1"                # choices: ["l1", "mse"]
+  scale_train_loss: 100.0        # Multiplicateur appliqué uniquement pendant le train_one_epoch
+  optimizer_name: "adamw"        # choices: ["adamw", "adam", "sgd"]
+  weight_decay: 0.0001           # si sgd ou adamw        
+  warm_up: false                 # Active le LinearLR sur 3 époques si true
