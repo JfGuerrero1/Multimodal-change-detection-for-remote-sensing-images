@@ -59,11 +59,9 @@ class SpectralLoss(nn.Module):
 
 
 class L1_uncertainty(nn.Module):
-    "Loss: L1 |U- |Y-Y_hat|, entre incertitude et erreur de prédiction"
+    """Loss: L1 entre l'incertitude prédite U et l'erreur absolue E."""
     def __init__(self):
         super().__init__()
-    def forward(self,  u,y_gt,y_pred):
-        with torch.no_grad():   
-            error = torch.abs(y_pred - y_gt)
-        loss=F.l1_loss(u, error)
-        return loss
+
+    def forward(self, u, error):
+        return F.l1_loss(u, error)
