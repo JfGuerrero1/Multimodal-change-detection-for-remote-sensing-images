@@ -10,6 +10,10 @@ class DualBranchUNet(nn.Module):
         final_op in ['identity', 'abs', 'softplus', 'square']
         """
         super().__init__()
+        self.n_msi = n_msi
+        self.n_hsi = n_hsi
+
+
 
         if interpolation_mode not in ['ConvTranspose2d', 'Bilinear']:
             raise ValueError("interpolation_mode must be 'ConvTranspose2d' or 'Bilinear'")
@@ -25,15 +29,15 @@ class DualBranchUNet(nn.Module):
 
         self.down1 = nn.Sequential(
             nn.MaxPool2d(2), 
-            DoubleConv(base_channels, base_channels*2, activation))   # [B, 128, H/2, W/2]
+            DoubleConv(base_channels, base_channels*2, activation))   # [B, 2*C, H/2, W/2]
         self.down2 = nn.Sequential(
             nn.MaxPool2d(2), 
             DoubleConv(base_channels*2, base_channels*4, activation),
-            nn.Dropout2d(p=drop_out_rate)) # [B, 256, H/4, W/4]
+            nn.Dropout2d(p=drop_out_rate)) # [B, 4*C, H/4, W/4]
         self.down3 = nn.Sequential(
             nn.MaxPool2d(2), 
             DoubleConv(base_channels*4, base_channels*8, activation),
-            nn.Dropout2d(p=drop_out_rate)) # [B, 512, H/8, W/8]
+            nn.Dropout2d(p=drop_out_rate)) # [B, 8*C, H/8, W/8]
         
         if self.interpolation_mode == 'ConvTranspose2d':
             self.up1a = nn.ConvTranspose2d(base_channels*8, base_channels*4, kernel_size=2, stride=2)  # [B, 256, H/4, W/4]
@@ -55,8 +59,8 @@ class DualBranchUNet(nn.Module):
         self.outc = nn.Conv2d(base_channels, n_hsi, kernel_size=1) 
 
     def forward(self, x):
-        x_msi = x[:, :12, :, :]   
-        x_hsi = x[:, 12:, :, :]   
+        x_msi = x[:, :self.n_msi, :, :]   
+        x_hsi = x[:, self.n_msi:self.n_msi+self.n_hsi, :, :]   
 
         feat_msi = self.branch_msi(x_msi) # [B, 32, H, W]
         feat_hsi = self.branch_hsi(x_hsi) # [B, 32, H, W]

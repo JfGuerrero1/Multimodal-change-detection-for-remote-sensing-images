@@ -1,181 +1,232 @@
-
-import torch
-import h5py
-import random
-import numpy as np
 from pathlib import Path
+import h5py
+import numpy as np
+import random
+import torch
 from torch.utils.data import Dataset
+import json
+
+import json
+import random
+from pathlib import Path
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+from src.constants import INTERP_MATRIX
 
 class SpectralDataset(Dataset):
-    def __init__(self, dataset_dir, simulated=False, is_normalized=False, augment=False,augment_illumination=False, is_residual=False, mask=None):
-        """
-        dataset_dir : Dossier contenant les fichiers HDF5 (ex: Path("cache/all_data"))
-        use_simulated_msi : Booléen pour utiliser le MSI simulé au lieu du MSI réel
-        is_normalized : Booléen pour utiliser le MSI normalisé
-        """
-        self.dataset_dir = Path(dataset_dir)
-        self.augment = augment
-        self.is_residual = is_residual
-        self.simulated = simulated
-        self.is_normalized = is_normalized
-        self.indices_to_use = np.where(mask)[0] if mask is not None else slice(None)
-        self.is_color_augmented=augment_illumination
+
+  def __init__(
+      self,
+      dataset_dir,
+      simulated=False,
+      is_normalised=False,
+      augment=False,
+      augment_illumination=False,
+      is_residual=False,
+      kept_indices=None,
+  ):
+    """dataset_dir : Dossier contenant les fichiers binaires et metadata.json (ex: Path("cache/all_data_memmap/train"))
+
+    simulated : Booléen pour utiliser le MSI simulé au lieu du MSI réel
+    is_normalised : Booléen pour utiliser le MSI normalisé augment : Data
+    augmentation spatiale (Flips / Rotations) augment_illumination : Jittering
+    sur les valeurs du MSI et de l'interpolation is_residual : True si le modèle prend
+    (x_msi, x_interp) en entrée kept_indices : Masque booléen/indices pour
+    filtrer les bandes spectro
+    """
+    self.dataset_dir = Path(dataset_dir)
+    self.augment = augment
+    self.is_residual = is_residual
+    self.simulated = simulated
+    self.is_normalised = is_normalised
+
+    if kept_indices is None:
+      self.indices_to_use = None
+    else:
+      self.indices_to_use = kept_indices
+
+    self.is_color_augmented = augment_illumination
+
+    # Sélection du nom du fichier MSI source
+    if self.is_normalised:
+      self.msi_filename = "msi_normalised.bin"
+    elif self.simulated:
+      self.msi_filename = "msi_simulated.bin"
+    else:
+      self.msi_filename = "msi_real.bin"
+
+    self.paths = {
+        "msi": self.dataset_dir / self.msi_filename,
+        "hsi": self.dataset_dir / "hsi.bin",
+        "interp": self.dataset_dir / "hsi_interp.bin",
+        "meta": self.dataset_dir / "metadata.json",
+    }
+
+    # Lecture des métadonnées JSON
+    if not self.paths["meta"].exists():
+      raise FileNotFoundError(
+          f"Le fichier metadata.json est introuvable dans {self.dataset_dir}"
+      )
+
+    with open(self.paths["meta"], "r", encoding="utf-8") as f:
+      self.meta = json.load(f)
+
+    self.length = self.meta["total_patches"]
+    self.msi_shape = tuple(self.meta["msi_shape"])
+    self.hsi_shape = tuple(self.meta["hsi_shape"])
+    self.dtype = self.meta["dtype"]
+    self.patch_ids = self.meta["patch_ids"]
+
+    # Pointers memmap (lazy loading pour compatibilité multi-worker DataLoader)
+    self.fp_msi = None
+    self.fp_hsi = None
+    self.fp_interp = None
+
+  def _init_memmap(self):
+    """Ouvre les fichiers memmap en lecture seule au démarrage de chaque worker."""
+    if self.fp_msi is not None:
+      return  # Déjà ouvert dans ce worker
+
+    try:
+      self.fp_msi = np.memmap(
+          self.paths["msi"],
+          dtype=self.dtype,
+          mode="r",
+          shape=self.msi_shape,
+      )
+      self.fp_hsi = np.memmap(
+          self.paths["hsi"],
+          dtype=self.dtype,
+          mode="r",
+          shape=self.hsi_shape,
+      )
+
+      if self.is_residual:
+        if not self.paths["interp"].exists():
+          raise FileNotFoundError(
+              f"Le fichier requis {self.paths['interp']} est introuvable !"
+          )
+        self.fp_interp = np.memmap(
+            self.paths["interp"],
+            dtype=self.dtype,
+            mode="r",
+            shape=self.hsi_shape,
+        )
+
+    except Exception as e:
+      print(
+          f"❌ Erreur lors de l'ouverture des fichiers memmap dans"
+          f" {self.dataset_dir} : {e}"
+      )
+      raise e
+
+  def __len__(self):
+    return self.length
+
+  def augment_color_jittering(self, *tensors, p=0.3):
+    """
+    Jittering d'illumination appliqué uniquement sur les entrées (*tensors),
+    laissant la vérité terrain (y) strictement intacte.
+    """
+    if random.random() < p:
+      factor = random.uniform(0.97, 1.03)
+      offset = random.uniform(-0.003, 0.003)
+      tensors = [t * factor + offset for t in tensors]
+    return tensors
+
+  def augment_geometric(self, *tensors, p_flip=0.5):
+    """
+    Applique des transformations géométriques synchrones (flips et rotations) 
+    sur un nombre arbitraire de tenseurs passés en arguments (*tensors), 
+    incluant cette fois la vérité terrain (y) car la géométrie les concerne tous.
+    """
+    # 1. Flip horizontal (axe des colonnes, dims=[2])
+    if random.random() < p_flip:
+      tensors = [torch.flip(t, dims=[2]) for t in tensors]
         
-        self.h5_files = {}
-        self.datasets = {}
-        self.load_h5_handles()
-
-    def load_h5_handles(self):
-        # Sélection du fichier MSI source selon les options
-        if self.is_normalized:
-            msi_filename = "msi_normalized.h5"
-        elif self.use_simulated_msi:
-            msi_filename = "msi_simulated.h5"
-        else:
-            msi_filename = "msi_real.h5"
-
-        paths = {
-            'msi': self.dataset_dir / msi_filename,
-            'hsi': self.dataset_dir / "hsi.h5",
-            'interp': self.dataset_dir / "hsi_interp.h5"
-        }
-
-    def augment_color_jittering(self, x):
-        if random.random() < 0.3:  
-            factor = random.uniform(0.97, 1.03)
-            offset = random.uniform(-0.003, 0.003)
-            x = x * factor + offset    
-        return x
-     
-    def augment_pair(self, x, y):
-        if random.random() < 0.5:
-            x ,y= torch.flip(x, dims=[2]), torch.flip(y, dims=[2])
-        if random.random() < 0.5:
-            x,y = torch.flip(x, dims=[1]), torch.flip(y, dims=[1])
-        k = torch.randint(0, 4, (1,)).item()
-
-        x,y = torch.rot90(x, k, dims=[1,2]),torch.rot90(y, k, dims=[1,2])
-        return x, y
+    # 2. Flip vertical (axe des lignes, dims=[1])
+    if random.random() < p_flip:
+      tensors = [torch.flip(t, dims=[1]) for t in tensors]
+        
+    # 3. Rotation aléatoire par multiples de 90°
+    k = torch.randint(0, 4, (1,)).item()
+    if k > 0:
+      tensors = [torch.rot90(t, k, dims=[1, 2]) for t in tensors]
+        
+    return tensors
     
-    def augment_triplet(self, x, x_interp, y):
-        if random.random() < 0.5:
-            x, x_interp, y = (torch.flip(x, dims=[2]),torch.flip(x_interp, dims=[2]),torch.flip(y, dims=[2]),)
-        if random.random() < 0.5:
-            x, x_interp, y = (torch.flip(x, dims=[1]),torch.flip(x_interp, dims=[1]),torch.flip(y, dims=[1]),)
-        k = torch.randint(0, 4, (1,)).item()
+  def __getitem__(self, idx):
+    # Garantit que les fichiers memmap sont ouverts dans le worker actuel
+    if self.fp_msi is None:
+      self._init_memmap()
 
-        x,x_interp,y= torch.rot90(x, k, dims=[1, 2]),torch.rot90(x_interp, k, dims=[1, 2]), torch.rot90(y, k, dims=[1, 2])
-        return x, x_interp, y
+    # Lecture memmap directe (.copy() pour instancier un array propre en RAM)
+    x_patch = self.fp_msi[idx].copy()  # (C_msi, H, W)
+    y_patch = self.fp_hsi[idx].copy()  # (C_hsi, H, W)
 
-  
+    # ID du patch depuis les métadonnées
+    patch_id = self.patch_ids[idx]
 
-    def __getitem__(self, idx):
-         
-        x_patch = self.dset_msi[idx]  # shape (C_msi, H, W)
-        y_patch = self.dset_hsi[idx]  # shape (C_hsi, H, W)
+    # Filtrage des bandes atmosphériques sur la GT (HSI)
+    if self.indices_to_use is not None:
+      y_patch = y_patch[self.indices_to_use, :, :]
+
+    x = torch.from_numpy(x_patch).float()
+    y = torch.from_numpy(y_patch).float()
+
+    #  CAS 1 : Modèle Résiduel (MSI, HSI_interp, HSI_gt)
+  #  CAS 1 : Modèle Résiduel (MSI, HSI_interp, HSI_gt)
+    if self.is_residual:
+      if self.is_normalised:
+        c_multi = x_patch.shape[0]
         
-        y_patch = y_patch[self.indices_to_use, :, :]
-        
-        x = torch.from_numpy(x_patch).float()
-        y = torch.from_numpy(y_patch).float()
+        # 1. On récupère les dimensions HSI complètes (avant filtrage) depuis metadata
+        c_hsi_full = self.hsi_shape[1]
+        h, w = self.hsi_shape[2], self.hsi_shape[3]
 
-        if self.is_color_augmented:
-            x=self.augment_color_jittering(self,x)
-        
-        if self.is_residual:
-            x_interp_patch = self.dset_interp[idx]
-            x_interp_patch = x_interp_patch[self.indices_to_use, :, :]
-            x_interp = torch.from_numpy(x_interp_patch).float()
-            if self.augment:
-                x, x_interp, y = self.augment_triplet(x, x_interp, y)
-                return x, x_interp, y
-            else:
-                if self.augment:
-                    x, y = self.augment_pair(x, y)
-                return x, y
+        # 2. Calcul avec la matrice d'interpolation (taille complète)
+        interp_numpy = INTERP_MATRIX @ x_patch.reshape(c_multi, -1)
+        x_interp_numpy = interp_numpy.reshape(c_hsi_full, h, w).astype(np.float32)
+      else:
+        # 3. Lecture directe du fichier interp (taille complète aussi)
+        x_interp_patch = self.fp_interp[idx].copy()
+        x_interp_numpy = x_interp_patch.astype(np.float32)
 
+      # 4. FILTRAGE APRÈS : On applique les indices sur le tenseur complet
+      if self.indices_to_use is not None:
+        x_interp_numpy = x_interp_numpy[self.indices_to_use, :, :]
 
-class UncertaintyDataset(Dataset):
-    def __init__(self, dataset_dir, use_simulated_msi=False, is_normalized=False, augment=False, augment_illumination=False, mask=None):
-        """
-        dataset_dir : Dossier contenant les fichiers HDF5 (ex: Path("cache/all_data"))
-        """
-        self.dataset_dir = Path(dataset_dir)
-        self.augment = augment
-        self.use_simulated_msi = use_simulated_msi
-        self.is_normalized = is_normalized
-        self.indices_to_use = np.where(mask)[0] if mask is not None else slice(None)
-        self.indices_to_use = np.where(mask)[0] if mask is not None else slice(None)
-        self.is_color_augmented=augment_illumination
-        
-        self.load_h5_handles()
+      x_interp = torch.from_numpy(x_interp_numpy).float()
 
-    def load_h5_handles(self):
-        # Sélection du fichier MSI source
-        if self.is_normalized:
-            msi_filename = "msi_normalized.h5"
-        elif self.use_simulated_msi:
-            msi_filename = "msi_simulated.h5"
-        else:
-            msi_filename = "msi_real.h5"
+      # Color Jittering appliqué SEULEMENT sur x et x_interp (y reste intact)
+      if self.is_color_augmented:
+        x, x_interp = self.augment_color_jittering(x, x_interp)
 
-        paths = {
-            'msi': self.dataset_dir / msi_filename,
-            'hsi_true': self.dataset_dir / "hsi.h5",
-            'hsi_sim': self.dataset_dir / "hsi_interp.h5"  # ou msi_simulated interpolé selon ton usage initial
-        }
+      # Augmentation géométrique appliquée sur tout le triplet (x, x_interp, y)
+      if self.augment:
+        x, x_interp, y = self.augment_geometric(x, x_interp, y)
 
-        for key, path in paths.items():
-            assert path.exists(), f"❌ Fichier HDF5 introuvable : {path}"
+      return x, x_interp, y, patch_id
 
-        self.f_msi = h5py.File(paths['msi'], 'r')
-        self.f_hsi_true = h5py.File(paths['hsi_true'], 'r')
-        self.f_hsi_sim = h5py.File(paths['hsi_sim'], 'r')
-        
-        self.dset_msi = self.f_msi['data']
-        self.dset_hsi_true = self.f_hsi_true['data']
-        self.dset_hsi_sim = self.f_hsi_sim['data']
-        
-        self.total_length = self.dset_msi.shape[0]
-        print(f"[{self.dataset_dir.name.upper()}] Chargé {self.total_length} patches pour l'incertitude (MSI: {msi_filename}).")
+      # Color Jittering appliqué SEULEMENT sur x et x_interp (y reste intact)
+      if self.is_color_augmented:
+        x, x_interp = self.augment_color_jittering(x, x_interp)
 
-    def __len__(self):
-        return self.total_length
+      # Augmentation géométrique appliquée sur tout le triplet (x, x_interp, y)
+      if self.augment:
+        x, x_interp, y = self.augment_geometric(x, x_interp, y)
 
-    def augment_triplet(self, x_msi, x_hsi, y_res):
-        if random.random() < 0.5:
-            x_msi = torch.flip(x_msi, dims=[2])
-            x_hsi = torch.flip(x_hsi, dims=[2])
-            y_res = torch.flip(y_res, dims=[2])
+      return x, x_interp, y, patch_id
 
-        if random.random() < 0.5:
-            x_msi = torch.flip(x_msi, dims=[1])
-            x_hsi = torch.flip(x_hsi, dims=[1])
-            y_res = torch.flip(y_res, dims=[1])
+    #  CAS 2 : Modèle Standard (MSI, HSI_gt)
+    else:
+      # Color Jittering appliqué SEULEMENT sur x (y reste intact)
+      if self.is_color_augmented:
+        x, = self.augment_color_jittering(x)
 
-        k = torch.randint(0, 4, (1,)).item()
-        x_msi = torch.rot90(x_msi, k, dims=[1, 2])
-        x_hsi = torch.rot90(x_hsi, k, dims=[1, 2])
-        y_res = torch.rot90(y_res, k, dims=[1, 2])
+      # Augmentation géométrique appliquée sur la paire (x, y)
+      if self.augment:
+        x, y = self.augment_geometric(x, y)
 
-        return x_msi, x_hsi, y_res
-
-    def __getitem__(self, idx):
-        # Lecture directe et rapide via h5py
-        msi = torch.from_numpy(self.dset_msi[idx]).float()
-        hsi_true = torch.from_numpy(self.dset_hsi_true[idx]).float()
-        hsi_sim = torch.from_numpy(self.dset_hsi_sim[idx]).float()
-
-        # Application du masque spectral si nécessaire
-        hsi_true = hsi_true[self.indices_to_use, :, :]
-        hsi_sim = hsi_sim[self.indices_to_use, :, :]
-
-        X = torch.cat([msi, hsi_sim], dim=0)
-        y = torch.abs(hsi_true - hsi_sim)
-
-        if self.augment:
-            c_msi = msi.shape[0]
-            msi_aug, hsi_sim_aug, y = self.augment_triplet(X[:c_msi], X[c_msi:], y)
-            X = torch.cat([msi_aug, hsi_sim_aug], dim=0)
-
-        return X, y 
+      return x, y, patch_id

@@ -137,11 +137,7 @@ def prepare_dataset_offline(scene_pairs, split_name, patch_size=256, use_simulat
 
                     patch_idx += 1
 
-def convert_to_h5():
 
-    for scene in tqdm() :
-
-        with xr.open_dataset()
                 
 def create_data_loaders_spectral( use_simulated_msi, augment, batch_size=8,  num_workers=4, is_residual=False,keep_atm_wave=True,is_normalised=False):
     
@@ -208,3 +204,5 @@ if __name__ == "__main__":
         patch_size=PATCH_SIZE, 
         use_simulated_msi=USE_SIMULATED_MSI
     )
+
+if __name__ == "__main__":

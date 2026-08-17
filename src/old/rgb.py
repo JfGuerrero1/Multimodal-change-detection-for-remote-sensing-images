@@ -45,7 +45,7 @@ WVL_PRS = np.array([
 CURRENT_FILE = Path(__file__).resolve()
 ROOT_DIR = Path("/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images")
  
-DATA_DIR = ROOT_DIR / "data" / "dataset"
+DATA_DIR = ROOT_DIR / "data" / "mumucd"
 CACHE_DIR = DATA_DIR / "patches_cache"
 DEFAULT_SRF_PATH = DATA_DIR / "srf_matrix_norm_s2b.npy"
 RESULT_DIR = ROOT_DIR / "results"
@@ -326,13 +326,10 @@ if __name__ == "__main__":
     
     print(INTERP_MATRIX.shape)
 
-    L_ens_scene = [ L_train_a, L_val]
+    L_ens_scene = [ L_val]
 
 
-    L_plot_dir = [
-     
-        RGB_DIR/ "train",
-        RGB_DIR/ "val"]
+    L_plot_dir = [RGB_DIR/ "val"]
             
     for i in range(len(L_plot_dir)):
         plot_dir = L_plot_dir[i]
@@ -445,37 +442,63 @@ if __name__ == "__main__":
 
 
             fig_b, axes_b = plt.subplots(2, 3, figsize=(15, 10))
-            before_row = [rgb_msi_before, rgb_hsi_before, rgb_msi_sim_before, rgb_hsi_interp_before, rgb_msi_before_norm]
-            
+            before_row = [
+    rgb_msi_before,
+    rgb_hsi_before,
+    rgb_msi_sim_before,
+    rgb_hsi_interp_before,
+    rgb_msi_before_norm,
+]
+
             for idx in range(6):
                 row, col = idx // 3, idx % 3
                 if idx < 5:
-                    axes_b[row, col].imshow(before_row[idx], interpolation='nearest')
-                    axes_b[row, col].set_title(titles[idx], fontsize=11, fontweight='bold')
-                axes_b[row, col].axis('off') # On éteint aussi la 6ème case vide
-                
-            plt.suptitle(f"Etat : BEFORE — Scène : {scene}", fontsize=14, fontweight='bold', y=0.96)
-            plt.tight_layout()
-            plt.savefig(plot_dir / f"{scene}_GRID_BEFORE.png", bbox_inches='tight', dpi=80)
+                    axes_b[row, col].imshow(before_row[idx], interpolation="nearest")
+    # Ajout d'un espacement (pad) pour éviter la collision avec l'image
+                    axes_b[row, col].set_title(
+        titles[idx], fontsize=11, fontweight="bold", pad=10
+    )
+                axes_b[row, col].axis("off")
+
+# Ajustement global pour réserver de l'espace en haut pour le suptitle
+            plt.suptitle(
+    f"Etat : BEFORE — Scène : {scene}", fontsize=14, fontweight="bold", y=0.98
+)
+            plt.tight_layout(
+    rect=[0, 0, 1, 0.94]
+)  # Laisse de la place en haut pour le suptitle
+            plt.savefig(
+    plot_dir / f"{scene}_GRID_BEFORE.png", bbox_inches="tight", dpi=80
+)
             plt.close(fig_b)
 
 
             fig_a, axes_a = plt.subplots(2, 3, figsize=(15, 10))
-            after_row = [rgb_msi_after, rgb_hsi_after, rgb_msi_sim_after, rgb_hsi_interp_after, rgb_msi_after_norm]
-            
+            after_row = [
+    rgb_msi_after,
+    rgb_hsi_after,
+    rgb_msi_sim_after,
+    rgb_hsi_interp_after,
+    rgb_msi_after_norm,
+]
+
             for idx in range(6):
                 row, col = idx // 3, idx % 3
-                if idx < 5:
-                    axes_a[row, col].imshow(after_row[idx], interpolation='nearest')
-                    axes_a[row, col].set_title(titles[idx], fontsize=11, fontweight='bold')
-                axes_a[row, col].axis('off') 
                 
-            plt.suptitle(f"Etat : AFTER — Scène : {scene}", fontsize=14, fontweight='bold', y=0.96)
-            plt.tight_layout()
-            plt.savefig(plot_dir / f"{scene}_GRID_AFTER.png", bbox_inches='tight', dpi=80)
-            plt.close(fig_a)
+                if idx < 5:
+                    axes_a[row, col].imshow(after_row[idx], interpolation="nearest")
+    # Ajout d'un espacement (pad) pour éviter la collision
+                    axes_a[row, col].set_title(
+        titles[idx], fontsize=11, fontweight="bold", pad=10
+    )
+                axes_a[row, col].axis("off")
 
-            print(f" Grilles 2x3 BEFORE et AFTER sauvegardées pour la scène {scene}")
+                plt.suptitle(
+    f"Etat : AFTER — Scène : {scene}", fontsize=14, fontweight="bold", y=0.98
+)
+                plt.tight_layout(rect=[0, 0, 1, 0.94])
+                plt.savefig(plot_dir / f"{scene}_GRID_AFTER.png", bbox_inches="tight", dpi=80)
+                plt.close(fig_a)
             
     
     

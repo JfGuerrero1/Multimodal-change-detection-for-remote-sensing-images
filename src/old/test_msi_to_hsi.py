@@ -7,7 +7,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from models import UNet, GradualExpansionUNet
-from losses.spectral_loss import SpectralLoss
+from src.models.losses.spectral_loss import SpectralLoss
 from old.utils_dataset import create_data_loaders_spectral, SpectralDataset
 
 CURRENT_FILE = Path(__file__).resolve()

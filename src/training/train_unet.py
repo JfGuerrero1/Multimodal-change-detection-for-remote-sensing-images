@@ -20,7 +20,7 @@ from torchmetrics.functional.image import (
 from tqdm import tqdm
 
 
-from src.models import GradualExpansionUNet_residual
+from src.models import GradualExpansionUNet
 from src.metrics_and_loss.loss import SpectralLoss
 from src.metrics_and_loss.metrics import compute_ssim_multiband,compute_ergas
 from src.prepare_data.prepare_patch import create_data_loaders_spectral
@@ -48,7 +48,7 @@ def build_model(config: dict, n_msi: int, n_hsi: int) -> torch.nn.Module:
   name = model_cfg.get("name", "").lower()
 
   if name in ["gradualexpansionunet_res"]:
-    model = GradualExpansionUNet_residual(
+    model = GradualExpansionUNet(
         in_msi=n_msi,
         in_hsi=n_hsi,
         interpolation_mode=model_cfg.get("interpolation_mode", "Bilinear"),
@@ -89,16 +89,15 @@ def train_one_epoch(
   use_amp = scaler is not None and device.type == "cuda"
   pbar = tqdm(loader, desc="Training")
 
-  for x_init, x_interp, y, patch_ids in pbar:
+  for x_init,  y, patch_ids in pbar:
     x_init = x_init.to(device, non_blocking=True)
-    x_interp = x_interp.to(device, non_blocking=True)
     y = y.to(device, non_blocking=True)
 
     optimizer.zero_grad()
 
     # 1. Forward pass avec adaptation dynamique au type de device
     with torch.amp.autocast(device_type=device.type, enabled=use_amp):
-      pred = model(x_init, x_interp)
+      pred = model(x_init)
       loss, mse, mae, sam = criterion(pred, y)
 
     # 2. Backward pass & Gradient Clipping
@@ -165,13 +164,13 @@ def validate(
   total_ssim, total_ergas = 0.0, 0.0
 
   pbar = tqdm(loader, desc="Validation")
-  for x_init, x_interp, y, patch_ids in pbar:
+  for x_init, y, patch_ids in pbar:
     x_init = x_init.to(device, non_blocking=True)
-    x_interp = x_interp.to(device, non_blocking=True)
+    
     y = y.to(device, non_blocking=True)
 
     with torch.amp.autocast(device_type="cuda", enabled=use_amp):
-      pred = model(x_init, x_interp)
+      pred = model(x_init)
       loss, mse, mae, sam = criterion(pred, y)
 
     total_loss += loss.item()
@@ -245,13 +244,12 @@ def test(
   total_ssim, total_ergas = 0.0, 0.0
 
   pbar = tqdm(loader, desc="Testing")
-  for x_init, x_interp, y, patch_ids in pbar:
+  for x_init,  y, patch_ids in pbar:
     x_init = x_init.to(device, non_blocking=True)
-    x_interp = x_interp.to(device, non_blocking=True)
     y = y.to(device, non_blocking=True)
 
     with torch.amp.autocast(device_type="cuda", enabled=use_amp):
-      pred = model(x_init, x_interp)
+      pred = model(x_init)
       loss, mse, mae, sam = criterion(pred, y)
 
     pred_safe = torch.clamp(pred, 1e-6, 1.0)
@@ -321,13 +319,12 @@ def evaluate_and_log_extremes(
       "\n🔍 [1/2] Évaluation du jeu de test et stockage des prédictions..."
   )
 
-  for x_init, x_interp, y, patch_ids in tqdm(loader, desc="Inférence Test"):
+  for x_init, y, patch_ids in tqdm(loader, desc="Inférence Test"):
     x_init = x_init.to(device, non_blocking=True)
-    x_interp = x_interp.to(device, non_blocking=True)
     y = y.to(device, non_blocking=True)
 
     with torch.amp.autocast(device_type='cuda', enabled=use_amp ):
-      pred = model(x_init, x_interp)
+      pred = model(x_init)
 
     # Conversion CPU / NumPy pour l'analyse spectrale et le plot
     pred_np = pred.detach().cpu().numpy()
@@ -524,11 +521,11 @@ def main():
     kept_indices=kept_indices  
 )
     # 4. Vérification des dimensions
-    sample_x, sample_x_interp, sample_y, _ = next(iter(train_loader))
+    sample_x, sample_y, _ = next(iter(train_loader))
     n_msi = sample_x.shape[1]
     n_hsi = sample_y.shape[1]
     print(
-    f" MSI shape: {sample_x.shape} | HSI Interp shape: {sample_x_interp.shape} |"
+    f" MSI shape: {sample_x.shape} |"
     f" HSI shape: {sample_y.shape}"
     )
 

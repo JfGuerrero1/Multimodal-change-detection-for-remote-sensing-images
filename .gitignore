@@ -206,3 +206,5 @@ checkpoints/
 *.ckpt
 outputs/
 __pycache__/
+job_slurm/
+results/

@@ -1,11 +1,11 @@
 experiment:
-  name: "uncertainty_dualbranchnafnet_run"
+  name: "spectral_gradual_expansion_run_all_wave_after"
   seed: 42
   project: "Multimodal-change-detection"
   entity: "JfGuerrero"
-  output_dir: "checkpoints/uncertainty_dualbranchnafnet_run"
+  output_dir: "checkpoints/filtered_clean_normalised"
 
-model_reconstruction:
+model:
   name: "gradualexpansionunet_res"
   base_channel: 64
   interpolation_mode: "Bilinear"
@@ -14,7 +14,7 @@ model_reconstruction:
   with_batch_norm: true
   with_mlp_spectral: false
   final_activation: null
-  load_model: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/filtered_clean/gradualexpansionunet_res_real_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual/best_model.pth"             # chemin vers un .pth si reprise d'entraînement, sinon null
+  load_model: null                 # chemin vers un .pth si reprise d'entraînement, sinon null
 
 # Configuration du filtrage des longueurs d'onde
 wavelength_filtering:
@@ -25,21 +25,12 @@ wavelength_filtering:
     - [1800, 2000]
   excluded_bands: []
 
-model_uncertainty:
-  name: "dualbranchnafnet"
-  base_channel: 64
-  interpolation_mode: "Bilinear"
-  activation: "silu"
-  final_activation: "softplus"       # Garantit b > 0 pour le paramètre d'échelle Laplace
-  drop_out_rate: 0.0
-  load_model_uncertainty: null  # Modèle HSI gelé
-
 data:
   task: "spectral"
   simulated: false
   augment: true                    
   augment_illumination: false       
-  is_normalised: false
+  is_normalised: true
   mask: null                       
   is_residual: true                # true pour gradualexpansionunet_res (x_init, x_interp, y)
   batch_size: 8
@@ -51,7 +42,10 @@ data:
 training:
   epochs: 100
   lr: 0.0002                       
-  loss_type: "l1_loss"
+  loss_type: "spectral_loss"
+  lambda_sam: 0.5
+  lambda_mse: 0.0                  
+  lambda_mae: 1.0
   scale_train_loss: 1.0            
   optimizer_name: "adamw"          
   weight_decay: 0.01               

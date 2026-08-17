@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from models import UNet, NAFNet, DualBranchUNet, DualBranchNAFNet
-from old.utils_dataset import create_dataloaders, UncertaintyDataset
+from old.utils_dataset import create_dataloaders, Spectraldataset
 from tqdm import tqdm
 
 def build_model(args):
@@ -357,7 +357,7 @@ def main():
         return
 
     train_loader, val_loader, test_loader = create_dataloaders(
-        dataset_class=UncertaintyDataset,
+        dataset_class=SpectralDataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers
     )

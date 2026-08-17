@@ -5,7 +5,7 @@ import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler  
 
 from models import UNet, GradualExpansionUNet
-from losses.spectral_loss import SpectralLoss
+from src.models.losses.spectral_loss import SpectralLoss
 from old.utils_dataset import create_data_loaders_spectral, SpectralDataset
 from tqdm import tqdm
 import wandb

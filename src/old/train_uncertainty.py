@@ -3,7 +3,7 @@ import torch
 import torch.optim as optim
 
 from models import UNet, NAFNet, DualBranchUNet, DualBranchNAFNet
-from old.utils_dataset import create_dataloaders, UncertaintyDataset
+from old.utils_dataset import create_dataloaders, SpectralDataset
 from tqdm import tqdm
 
 def build_model(args):
@@ -201,7 +201,7 @@ def main():
         scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, total_iters=3) 
 
     train_loader, val_loader, test_loader = create_dataloaders(
-        dataset_class=UncertaintyDataset,
+        dataset_class=SpectralDataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers
     )

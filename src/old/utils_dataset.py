@@ -548,7 +548,7 @@ class SpectralDataset(Dataset):
 ##################################################################################################################
 
  ################################################################################################################   
-class UncertaintyDataset(Dataset):
+class SpectralDataset(Dataset):
     def __init__(self, cache_dir, augment=False):
         self.augment = augment
 

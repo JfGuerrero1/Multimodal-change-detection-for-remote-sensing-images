@@ -11,7 +11,7 @@ class GradualExpansionUNet_residual(nn.Module):
     Output:           [B, in_hsi, H, W]  (e.g., [B, 230, H, W])
     """
     def __init__(self, in_msi, in_hsi, interpolation_mode='Bilinear', base_channel=64, 
-                 activation='silu', augment=True, with_batch_norm=True, 
+                 activation='silu', with_batch_norm=True, 
                  with_mlp_spectral=False, final_activation=None):
         super().__init__()
 
@@ -19,7 +19,6 @@ class GradualExpansionUNet_residual(nn.Module):
             raise ValueError("interpolation_mode must be 'ConvTranspose2d' or 'Bilinear'")
 
         self.interpolation_mode = interpolation_mode
-        self.augment = augment 
         self.with_mlp_spectral = with_mlp_spectral
 
         # --- ENCODER (Downsampling) ---

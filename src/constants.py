@@ -6,7 +6,7 @@ import scipy.interpolate
 CURRENT_FILE = Path(__file__).resolve()
 ROOT_DIR = CURRENT_FILE.parent.parent
 DATA_DIR = ROOT_DIR / 'data' / 'mumucd'
-CACHE_DIR = DATA_DIR / 'patches_caches'
+CACHE_DIR = ROOT_DIR/ 'data' / 'patches_caches'
 TRAIN_DIR = CACHE_DIR / 'train'
 TEST_DIR = CACHE_DIR / 'test'
 VAL_DIR = CACHE_DIR / 'val'
@@ -67,3 +67,18 @@ DW_INFO = {
     7: {"name": "Bare ground", "color": '#A59B8F'},
     8: {"name": "Snow / Clouds", "color": '#B39FE1'}
 }
+
+ATMOSPHERIC_WINDOWS = [
+    (1350, 1500),
+    (1800, 2000)
+]
+
+def get_spectral_mask(wvl):
+    """
+    Renvoie un masque booléen (True pour garder, False pour enlever)
+    en fonction d'un tableau de longueurs d'onde 'wvl'.
+    """
+    mask = np.ones(len(wvl), dtype=bool)
+    for low, high in ATMOSPHERIC_WINDOWS:
+        mask &= ~((wvl >= low) & (wvl <= high))
+    return mask
