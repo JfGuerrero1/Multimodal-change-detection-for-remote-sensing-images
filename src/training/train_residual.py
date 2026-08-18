@@ -1,172 +1,93 @@
-import argparse
-import os
-from pathlib import Path
+from sched import scheduler
 import sys
-import tempfile
+from pathlib import Path
+from xml.parsers.expat import model
 
 # Ajoute la racine du projet au sys.path de Python
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-
-import numpy as np
-from scipy.stats import spearmanr
+import argparse
 import torch
-import torch.nn.functional as F
 import torch.optim.lr_scheduler as lr_scheduler
 from tqdm import tqdm
 import wandb
-
-from src.constants import WVL_PRS
-from src.metrics_and_loss.loss import L1_uncertainty
-from src.models import (
-    DualBranchNAFNet,
-    DualBranchUNet,
-    GradualExpansionUNet,
-    GradualExpansionUNet_residual,
+from pathlib import Path
+import numpy as np
+import numpy as np
+import torch
+from torchmetrics.functional.image import (
+    structural_similarity_index_measure as ssim_fn,
 )
+from tqdm import tqdm
+
+
+from src.models import GradualExpansionUNet_residual
+from src.metrics_and_loss.loss import SpectralLoss
+from src.metrics_and_loss.metrics import compute_ssim_multiband,compute_ergas
 from src.prepare_data.prepare_patch import create_data_loaders_spectral
+from src.visualise.visualisation import visualise_synthesis
+from src.constants import WVL_PRS
+from src.prepare_data.dataset import SpectralDataset
 from src.training.utils_train import (
-    EarlyStopping,
-    build_lr_scheduler,
-    build_optimizer,
-    get_device,
-    get_kept_wavelength_indices,
-    get_project_root,
-    init_wandb,
+    set_seed, 
+    get_device, 
+    get_project_root, 
     load_config,
-    save_checkpoint,
-    set_seed,
+    init_wandb, 
+    save_checkpoint, 
+    build_optimizer,
+    EarlyStopping,
+    build_run_name,
+    build_lr_scheduler,
+    get_kept_wavelength_indices
+
 )
-from src.visualise.visualise_uncertainty import visualise_synthesis_uncertainty
 
+def build_model(config: dict, n_msi: int, n_hsi: int) -> torch.nn.Module:
+  """Instancie le modèle selon la configuration YAML."""
+  model_cfg = config["model"]
+  name = model_cfg.get("name", "").lower()
 
-# =====================================================================
-# METRIQUES D'INCERTITUDE OPTIMISÉES
-# =====================================================================
-def compute_fast_ause(
-    E: np.ndarray, U: np.ndarray, num_bins: int = 100
-) -> float:
-  """Calcule l'AUSE (Area Under Sparsification Error) vectorisée sur CPU/NumPy."""
-  n_samples = len(E)
-  if n_samples > 100_000:
-    idx = np.random.choice(n_samples, size=100_000, replace=False)
-    E, U = E[idx], U[idx]
-    n_samples = 100_000
-
-  idx_m = np.argsort(U)[::-1]
-  idx_o = np.argsort(E)[::-1]
-
-  sum_m = np.cumsum(E[idx_m][::-1])[::-1]
-  sum_o = np.cumsum(E[idx_o][::-1])[::-1]
-
-  k_indices = np.linspace(
-      0, n_samples - 1, num_bins, endpoint=False, dtype=int
-  )
-  counts = n_samples - k_indices
-
-  curve_m = sum_m[k_indices] / counts
-  curve_o = sum_o[k_indices] / counts
-
-  x_axis = np.linspace(0.0, 1.0, num_bins)
-  trapz_func = getattr(np, 'trapezoid', getattr(np, 'trapz', None))
-
-  auc_m = trapz_func(curve_m, x=x_axis)
-  auc_o = trapz_func(curve_o, x=x_axis)
-
-  return float(auc_m - auc_o)
-
-
-def build_model_reconstruction(
-    model_cfg: dict, in_channels: int, n_hsi: int
-) -> torch.nn.Module:
-  """Instancie dynamiquement le modèle de reconstruction (MSI -> HSI)."""
-  name = model_cfg.get('name', '').lower()
-
-  if name == 'gradualexpansionunet_res':
-    return GradualExpansionUNet_residual(
-        in_msi=in_channels,
+  if name in ["gradualexpansionunet_res"]:
+    model = GradualExpansionUNet_residual(
+        in_msi=n_msi,
         in_hsi=n_hsi,
-        interpolation_mode=model_cfg.get('interpolation_mode', 'Bilinear'),
-        base_channel=model_cfg.get('base_channel', 64),
-        activation=model_cfg.get('activation', 'silu'),
-        with_batch_norm=model_cfg.get('with_batch_norm', True),
-        with_mlp_spectral=model_cfg.get('with_mlp_spectral', False),
-        final_activation=model_cfg.get('final_activation', None),
-    )
-  elif name == 'gradualexpansionunet':
-    return GradualExpansionUNet(
-        in_msi=in_channels,
-        in_hsi=n_hsi,
-        interpolation_mode=model_cfg.get('interpolation_mode', 'Bilinear'),
-        base_channel=model_cfg.get('base_channel', 64),
-        activation=model_cfg.get('activation', 'silu'),
-        with_batch_norm=model_cfg.get('with_batch_norm', True),
-        with_mlp_spectral=model_cfg.get('with_mlp_spectral', False),
-        final_activation=model_cfg.get('final_activation', None),
+        interpolation_mode=model_cfg.get("interpolation_mode", "Bilinear"),
+        base_channel=model_cfg.get("base_channel", 64),
+        activation=model_cfg.get("activation", "silu"),
+        with_batch_norm=model_cfg.get("with_batch_norm", True),
+        with_mlp_spectral=model_cfg.get("with_mlp_spectral", False),
+        final_activation=model_cfg.get("final_activation", None),
     )
   else:
-    raise ValueError(
-        f"❌ Modèle de reconstruction non reconnu : '{name}'"
-    )
+    raise ValueError(f"❌ Modèle non reconnu : '{name}'")
 
+  return model
 
-def build_model_uncertainty(
-    model_cfg: dict, in_channels: int, n_hsi: int
-) -> torch.nn.Module:
-  """Instancie dynamiquement le modèle d'incertitude."""
-  name = model_cfg.get('name', '').lower()
-
-  if name in ['dualbranchunet', 'uncertainty_unet']:
-    return DualBranchUNet(
-        n_msi=in_channels,
-        n_hsi=n_hsi,
-        base_channels=model_cfg.get('base_channel', 64),
-        interpolation_mode=model_cfg.get('interpolation_mode', 'Bilinear'),
-        activation=model_cfg.get('activation', 'silu'),
-        final_op=model_cfg.get('final_activation', 'softplus'),
-        drop_out_rate=model_cfg.get('drop_out_rate', 0.1),
-    )
-  elif name in ['dualbranchnafnet', 'uncertainty_nafnet']:
-    return DualBranchNAFNet(
-        n_msi=in_channels,
-        n_hsi=n_hsi,
-        out_channels=n_hsi,
-        width=model_cfg.get('base_channel', 64),
-        drop_out_rate=model_cfg.get('drop_out_rate', 0.0),
-        final_op=model_cfg.get('final_activation', 'softplus'),
-    )
-  else:
-    raise ValueError(f"❌ Modèle d'incertitude non reconnu : '{name}'")
-
-
-def build_run_name_uncertainty(config: dict) -> str:
-  """Génère le nom du run spécifique aux modèles d'incertitude."""
-  unc_cfg = config.get('model_uncertainty', {})
-  train_cfg = config.get('training', {})
-
-  model_name = unc_cfg.get('name', 'uncertainty_model')
-  base_ch = unc_cfg.get('base_channel', 64)
-  lr = train_cfg.get('lr', 0.0001)
-  loss_type = train_cfg.get('loss_type', 'l1')
-
-  return f'{model_name}_ch{base_ch}_{loss_type}_lr-{lr}'
+import numpy as np
+import torch
+from tqdm import tqdm
 
 
 def train_one_epoch(
-    model_reconstruction: torch.nn.Module,
-    model_uncertainty: torch.nn.Module,
+    model: torch.nn.Module,
     loader,
     optimizer: torch.optim.Optimizer,
     criterion,
     device: torch.device,
     scaler: torch.amp.GradScaler = None,
 ) -> dict:
-  """Entraîne le modèle d'incertitude sur une époque."""
-  model_reconstruction.eval()
-  model_uncertainty.train()
+  """Entraîne le modèle sur une époque avec support AMP / Mixed Precision."""
+  model.train()
 
-  use_amp = scaler is not None and device.type == 'cuda'
-  running_loss = 0.0
-  pbar = tqdm(loader, desc='Training Uncertainty')
+  total_loss = 0.0
+  total_mse = 0.0
+  total_sam = 0.0
+  total_mae = 0.0
+  total_grad_norm = 0.0
+  valid_grad_steps = 0  # Compteur pour ignorer les étapes sautées par AMP
+
+  use_amp = scaler is not None and device.type == "cuda"
+  pbar = tqdm(loader, desc="Training")
 
   for x_init, x_interp, y, patch_ids in pbar:
     x_init = x_init.to(device, non_blocking=True)
@@ -175,375 +96,634 @@ def train_one_epoch(
 
     optimizer.zero_grad()
 
-    with torch.no_grad():
-      y_pred = model_reconstruction(x_init, x_interp)
-      E_map = torch.abs(y_pred - y)
+    # 1. Forward pass avec adaptation dynamique au type de device
+    with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+      pred = model(x_init, x_interp)
+      loss, mse, mae, sam = criterion(pred, y)
 
-    with torch.amp.autocast(device_type=device.type, enabled=bool(use_amp)):
-      unc_input = torch.cat([x_init, y_pred.detach()], dim=1)
-      u_hat = model_uncertainty(unc_input)
-      loss = criterion(u_hat, E_map)
-
+    # 2. Backward pass & Gradient Clipping
     if use_amp:
       scaler.scale(loss).backward()
-      scaler.unscale_(optimizer)
-      torch.nn.utils.clip_grad_norm_(
-          model_uncertainty.parameters(), max_norm=1.0
+      scaler.unscale_(optimizer)  # Requis avant clip_grad_norm_
+      grad_norm = torch.nn.utils.clip_grad_norm_(
+          model.parameters(), max_norm=1.0
       )
       scaler.step(optimizer)
       scaler.update()
     else:
       loss.backward()
-      torch.nn.utils.clip_grad_norm_(
-          model_uncertainty.parameters(), max_norm=1.0
+      grad_norm = torch.nn.utils.clip_grad_norm_(
+          model.parameters(), max_norm=1.0
       )
       optimizer.step()
 
-    running_loss += loss.item()
-    pbar.set_postfix({'loss_unc': f'{loss.item():.6f}'})
+    # 3. Sécurité : On n'ajoute la norme du gradient que si elle n'est pas NaN/Inf (pas d'overflow AMP)
+    gn_val = grad_norm.item()
+    if not (np.isnan(gn_val) or np.isinf(gn_val)):
+      total_grad_norm += gn_val
+      valid_grad_steps += 1
 
-  return {'train_loss_uncertainty': running_loss / len(loader)}
+    total_loss += loss.item()
+    total_mse += mse.item()
+    total_sam += sam.item()
+    total_mae += mae.item()
 
+    pbar.set_postfix(
+        Loss=f"{loss.item():.4f}",
+        MAE=f"{mae.item():.4f}",
+        SAM_deg=f"{np.degrees(sam.item()):.2f}°",
+        GradNorm=f"{gn_val:.2f}",
+    )
+
+  n = len(loader)
+  metrics = {
+      "train_loss": total_loss / n,
+      "train_mse": total_mse / n,
+      "train_mae": total_mae / n,
+      "train_sam": total_sam / n,
+      "train_sam_deg": np.degrees(total_sam / n),
+      "train_grad_norm": (
+          total_grad_norm / max(1, valid_grad_steps)
+      ),  # Moyenne uniquement sur les pas valides
+  }
+
+  return metrics
 
 @torch.no_grad()
 def validate(
-    model_reconstruction: torch.nn.Module,
-    model_uncertainty: torch.nn.Module,
+    model: torch.nn.Module,
     loader,
     criterion,
     device: torch.device,
     use_amp: bool = False,
+    compute_full_metrics: bool = True,
 ) -> dict:
-  """Valide le modèle d'incertitude sans fuite de mémoire RAM."""
-  model_reconstruction.eval()
-  model_uncertainty.eval()
+  """Valide le modèle avec support AMP, PSNR, RMSE et métriques de synthèse."""
+  model.eval()
 
-  running_loss = 0.0
-  all_E = []
-  all_U = []
+  total_loss, total_mse, total_sam, total_mae = 0.0, 0.0, 0.0, 0.0
+  total_ssim, total_ergas = 0.0, 0.0
 
-  pbar = tqdm(loader, desc='Validation')
-  for x_init, x_interp, y, _ in pbar:
+  pbar = tqdm(loader, desc="Validation")
+  for x_init, x_interp, y, patch_ids in pbar:
     x_init = x_init.to(device, non_blocking=True)
     x_interp = x_interp.to(device, non_blocking=True)
     y = y.to(device, non_blocking=True)
 
-    with torch.amp.autocast(device_type=device.type, enabled=bool(use_amp)):
-      y_pred = model_reconstruction(x_init, x_interp)
-      E_map = torch.abs(y_pred - y)
-      unc_input = torch.cat([x_init, y_pred], dim=1)
-      u_hat = model_uncertainty(unc_input)
-      loss = criterion(u_hat, E_map)
+    with torch.amp.autocast(device_type="cuda", enabled=use_amp):
+      pred = model(x_init, x_interp)
+      loss, mse, mae, sam = criterion(pred, y)
 
-    running_loss += loss.item()
+    total_loss += loss.item()
+    total_mse += mse.item()
+    total_sam += sam.item()
+    total_mae += mae.item()
 
-    sub_E = E_map.detach().cpu().numpy().ravel()
-    sub_U = u_hat.detach().cpu().numpy().ravel()
+    # Calcul temps réel du PSNR pour la barre de progression
+    batch_rmse = np.sqrt(mse.item())
+    batch_psnr = (
+        20 * np.log10(1.0 / batch_rmse) if batch_rmse > 1e-8 else 100.0
+    )
 
-    if len(sub_E) > 50_000:
-      idx = np.random.choice(len(sub_E), size=50_000, replace=False)
-      sub_E, sub_U = sub_E[idx], sub_U[idx]
+    postfix_dict = {
+        "Loss": f"{loss.item():.4f}",
+        "PSNR": f"{batch_psnr:.2f}dB",
+        "SAM_deg": f"{np.degrees(sam.item()):.2f}°",
+    }
 
-    all_E.append(sub_E.astype(np.float32))
-    all_U.append(sub_U.astype(np.float32))
+    if compute_full_metrics:
+      pred_safe = torch.clamp(pred, 1e-6, 1.0)
+      y_safe = torch.clamp(y, 1e-6, 1.0)
 
-  E_flat = np.concatenate(all_E)
-  U_flat = np.concatenate(all_U)
+      batch_ssim = ssim_fn(pred_safe, y_safe, data_range=1.0)
+      batch_ergas = compute_ergas(
+          pred_safe.cpu().numpy(), y_safe.cpu().numpy()
+      )
 
-  picp_95 = float(np.mean(E_flat <= 3.0 * U_flat))
-  spearman_corr, _ = spearmanr(U_flat[::100], E_flat[::100])
+      total_ssim += batch_ssim.item()
+      total_ergas += batch_ergas
 
-  return {
-      'val_loss_uncertainty': running_loss / len(loader),
-      'val_picp_95': picp_95,
-      'val_spearman': float(spearman_corr),
+      postfix_dict["SSIM"] = f"{batch_ssim.item():.3f}"
+      postfix_dict["ERGAS"] = f"{batch_ergas:.1f}"
+
+    pbar.set_postfix(**postfix_dict)
+
+  n = len(loader)
+  mean_mse = total_mse / n
+  mean_rmse = np.sqrt(mean_mse)
+  mean_psnr = 20 * np.log10(1.0 / mean_rmse) if mean_rmse > 1e-8 else 99.0
+
+  metrics = {
+      "val_loss": total_loss / n,
+      "val_mse": mean_mse,
+      "val_rmse": mean_rmse,
+      "val_psnr": mean_psnr,
+      "val_mae": total_mae / n,
+      "val_sam": total_sam / n,
+      "val_sam_deg": np.degrees(total_sam / n),
   }
+
+  if compute_full_metrics:
+    metrics["val_ssim"] = total_ssim / n
+    metrics["val_ergas"] = total_ergas / n
+
+  return metrics
 
 
 @torch.no_grad()
 def test(
-    model_reconstruction: torch.nn.Module,
-    model_uncertainty: torch.nn.Module,
+    model: torch.nn.Module,
     loader,
     criterion,
     device: torch.device,
     use_amp: bool = False,
 ) -> dict:
-  """Évaluation de test complète avec AUSE et métriques d'incertitude."""
-  model_reconstruction.eval()
-  model_uncertainty.eval()
+  """Évalue le modèle sur le test set avec la suite complète des métriques physiques."""
+  model.eval()
 
-  running_loss = 0.0
-  all_E, all_U = [], []
+  total_loss, total_mse, total_sam, total_mae = 0.0, 0.0, 0.0, 0.0
+  total_ssim, total_ergas = 0.0, 0.0
 
-  pbar = tqdm(loader, desc='Testing')
-  for x_init, x_interp, y, _ in pbar:
+  pbar = tqdm(loader, desc="Testing")
+  for x_init, x_interp, y, patch_ids in pbar:
     x_init = x_init.to(device, non_blocking=True)
     x_interp = x_interp.to(device, non_blocking=True)
     y = y.to(device, non_blocking=True)
 
-    with torch.amp.autocast(device_type=device.type, enabled=bool(use_amp)):
-      y_pred = model_reconstruction(x_init, x_interp)
-      E_map = torch.abs(y_pred - y)
-      unc_input = torch.cat([x_init, y_pred], dim=1)
-      u_hat = model_uncertainty(unc_input)
-      loss = criterion(u_hat, E_map)
+    with torch.amp.autocast(device_type="cuda", enabled=use_amp):
+      pred = model(x_init, x_interp)
+      loss, mse, mae, sam = criterion(pred, y)
 
-    running_loss += loss.item()
+    pred_safe = torch.clamp(pred, 1e-6, 1.0)
+    y_safe = torch.clamp(y, 1e-6, 1.0)
 
-    sub_E = E_map.detach().cpu().numpy().ravel()
-    sub_U = u_hat.detach().cpu().numpy().ravel()
+    batch_ssim = ssim_fn(pred_safe, y_safe, data_range=1.0)
+    batch_ergas = compute_ergas(pred_safe.cpu().numpy(), y_safe.cpu().numpy())
 
-    if len(sub_E) > 50_000:
-      idx = np.random.choice(len(sub_E), size=50_000, replace=False)
-      sub_E, sub_U = sub_E[idx], sub_U[idx]
+    total_loss += loss.item()
+    total_mse += mse.item()
+    total_sam += sam.item()
+    total_mae += mae.item()
+    total_ssim += batch_ssim.item()
+    total_ergas += batch_ergas
 
-    all_E.append(sub_E.astype(np.float32))
-    all_U.append(sub_U.astype(np.float32))
+    batch_rmse = np.sqrt(mse.item())
+    batch_psnr = 20 * np.log10(1.0 / batch_rmse) if batch_rmse > 1e-8 else 99.0
 
-  E_flat = np.concatenate(all_E)
-  U_flat = np.concatenate(all_U)
+    pbar.set_postfix(
+        Loss=f"{loss.item():.4f}",
+        PSNR=f"{batch_psnr:.2f}dB",
+        SAM_deg=f"{np.degrees(sam.item()):.2f}°",
+        SSIM=f"{batch_ssim.item():.4f}",
+        ERGAS=f"{batch_ergas:.2f}",
+    )
 
-  spearman_corr, _ = spearmanr(U_flat[::10], E_flat[::10])
-  ause_score = compute_fast_ause(E_flat, U_flat)
-  picp_95 = float(np.mean(E_flat <= 3.0 * U_flat))
+  n = len(loader)
+  mean_mse = total_mse / n
+  mean_rmse = np.sqrt(mean_mse)
+  mean_psnr = 20 * np.log10(1.0 / mean_rmse) if mean_rmse > 1e-8 else 100.0
 
   return {
-      'test_loss_uncertainty': running_loss / len(loader),
-      'test_spearman': float(spearman_corr),
-      'test_ause': ause_score,
-      'test_picp_95': picp_95,
+      "loss": total_loss / n,
+      "mse": mean_mse,
+      "rmse": mean_rmse,
+      "psnr": mean_psnr,
+      "mae": total_mae / n,
+      "sam": total_sam / n,
+      "sam_deg": np.degrees(total_sam / n),
+      "ssim": total_ssim / n,
+      "ergas": total_ergas / n,
   }
 
-
-def get_fixed_random_patches(loader, n_per_scene: int = 2, seed: int = 42) -> dict:
-  """Scande le loader une seule fois pour pré-sélectionner N patchs par scène."""
-  scene_to_patches = {}
-  for _, _, _, patch_ids in loader:
-    for p_id in patch_ids:
-      p_id_val = p_id if isinstance(p_id, int) else p_id.item()
-      scene_id = (p_id_val // 36) + 1 if isinstance(p_id_val, int) else str(p_id_val).split("_")[1]
-      if scene_id not in scene_to_patches:
-        scene_to_patches[scene_id] = []
-      if p_id_val not in scene_to_patches[scene_id]:
-        scene_to_patches[scene_id].append(p_id_val)
-
-  rng = np.random.default_rng(seed)
-  fixed_targets = {}
-  for scene_id, p_ids in scene_to_patches.items():
-    k = min(n_per_scene, len(p_ids))
-    fixed_targets[scene_id] = list(rng.choice(p_ids, size=k, replace=False))
-  return fixed_targets
-
-
 @torch.no_grad()
-def evaluate_and_log_uncertainty(
-    model_rec: torch.nn.Module,
-    model_unc: torch.nn.Module,
+def evaluate_and_log_extremes(
+    model: torch.nn.Module,
     loader: torch.utils.data.DataLoader,
     device: torch.device,
     wvl_full: np.ndarray,
     kept_indices: np.ndarray = None,
     use_amp: bool = False,
-    fixed_target_patches: dict = None,
-    prefix: str = "Val",
+    n_worst: int = 2,
+    n_best: int = 1,
+    prefix: str="Val Best"
 ):
-  """Inférence ultra-rapide : ne traite et log que les patchs fixes pré-sélectionnés."""
-  model_rec.eval()
-  model_unc.eval()
+  """Évalue le modèle, repère les N pires et N meilleurs patchs par scène,
 
-  if not fixed_target_patches:
-    return
+  et envoie les planches de synthèse directement sur WandB.
+  """
+  model.eval()
 
-  found_patches = {scene_id: set() for scene_id in fixed_target_patches.keys()}
-  total_to_find = sum(len(v) for v in fixed_target_patches.values())
-  found_count = 0
+  # Dictionnaire pour regrouper les patchs par scène (Image ID)
+  # Structure: { scene_id: [ list_of_patch_dicts ] }
+  scenes_dict = {}
 
-  print(f"\n📸 Log ultra-rapide des {total_to_find} patchs fixes ({prefix})...")
+  print(
+      "\n🔍 [1/2] Évaluation du jeu de test et stockage des prédictions..."
+  )
 
-  for x_init, x_interp, y, patch_ids in loader:
-    if found_count >= total_to_find:
-      break  # Arrêt immédiat du parcours dès que tous les patchs cibles sont trouvés
+  for x_init, x_interp, y, patch_ids in tqdm(loader, desc="Inférence Test"):
+    x_init = x_init.to(device, non_blocking=True)
+    x_interp = x_interp.to(device, non_blocking=True)
+    y = y.to(device, non_blocking=True)
+
+    with torch.amp.autocast(device_type='cuda', enabled=use_amp ):
+      pred = model(x_init, x_interp)
+
+    # Conversion CPU / NumPy pour l'analyse spectrale et le plot
+    pred_np = pred.detach().cpu().numpy()
+    y_np = y.detach().cpu().numpy()
+    x_init_np = x_init.detach().cpu().numpy()
 
     batch_size = y.size(0)
-    batch_indices_to_process = []
 
     for i in range(batch_size):
-      p_id = (patch_ids[i] if isinstance(patch_ids, list) else patch_ids[i].item())
-      scene_id = (p_id // 36) + 1 if isinstance(p_id, int) else str(p_id).split("_")[1]
+      # Récupération de l'ID de la scène et du patch
+      # Adapte l'extraction selon la structure de ton patch_ids (ex: tuple, str, int)
+      p_id = (
+          patch_ids[i] if isinstance(patch_ids, list) else patch_ids[i].item()
+      )
 
-      if scene_id in fixed_target_patches and p_id in fixed_target_patches[scene_id]:
-        if p_id not in found_patches[scene_id]:
-          batch_indices_to_process.append((i, p_id, scene_id))
+      # Exemple de parsing si patch_id est un entier de 0 à 251 (36 patchs par image)
+      if isinstance(p_id, int):
+        scene_id = (p_id // 36) + 1  # Scène 1 à 7
+        local_patch_idx = p_id % 36  # Patch 0 à 35
+      else:
+        # Si c'est un string type "scene_1_patch_5"
+        scene_id = str(p_id).split("_")[1]
+        local_patch_idx = p_id
 
-    if not batch_indices_to_process:
-      continue
+      # Dimensions : passer les canaux en dernier (H, W, C)
+      gt_hwc = (
+          np.moveaxis(y_np[i], 0, -1)
+          if y_np[i].shape[0] < y_np[i].shape[-1]
+          else y_np[i]
+      )
+      pred_hwc = (
+          np.moveaxis(pred_np[i], 0, -1)
+          if pred_np[i].shape[0] < pred_np[i].shape[-1]
+          else pred_np[i]
+      )
+      msi_hwc = (
+          np.moveaxis(x_init_np[i], 0, -1)
+          if x_init_np[i].shape[0] < x_init_np[i].shape[-1]
+          else x_init_np[i]
+      )
 
-    x_init_b = x_init.to(device, non_blocking=True)
-    x_interp_b = x_interp.to(device, non_blocking=True)
-    y_b = y.to(device, non_blocking=True)
-
-    with torch.amp.autocast(device_type="cuda", enabled=bool(use_amp)):
-      pred = model_rec(x_init_b, x_interp_b)
-      unc_input = torch.cat([x_init_b, pred], dim=1)
-      u_hat = model_unc(unc_input)
-
-    pred_np = pred.detach().cpu().numpy()
-    y_np = y_b.detach().cpu().numpy()
-    x_init_np = x_init_b.detach().cpu().numpy()
-    u_hat_np = u_hat.detach().cpu().numpy()
-
-    for idx_batch, p_id, scene_id in batch_indices_to_process:
-      if p_id in found_patches[scene_id]:
-        continue
-
-      gt_hwc = np.moveaxis(y_np[idx_batch], 0, -1) if y_np[idx_batch].shape[0] < y_np[idx_batch].shape[-1] else y_np[idx_batch]
-      pred_hwc = np.moveaxis(pred_np[idx_batch], 0, -1) if pred_np[idx_batch].shape[0] < pred_np[idx_batch].shape[-1] else pred_np[idx_batch]
-      msi_hwc = np.moveaxis(x_init_np[idx_batch], 0, -1) if x_init_np[idx_batch].shape[0] < x_init_np[idx_batch].shape[-1] else x_init_np[idx_batch]
-      unc_hwc = np.moveaxis(u_hat_np[idx_batch], 0, -1) if u_hat_np[idx_batch].shape[0] < u_hat_np[idx_batch].shape[-1] else u_hat_np[idx_batch]
-
+      
       mae = float(np.mean(np.abs(gt_hwc - pred_hwc)))
+
       dot = np.sum(pred_hwc * gt_hwc, axis=-1)
       norm_p = np.linalg.norm(pred_hwc, axis=-1)
       norm_g = np.linalg.norm(gt_hwc, axis=-1)
       sam_map = np.arccos(np.clip(dot / (norm_p * norm_g + 1e-8), -1.0, 1.0))
       sam_rad = float(np.mean(sam_map))
 
-      save_name = f"{prefix}_Scene_{scene_id}_Patch_{p_id}_SAM_{np.degrees(sam_rad):.2f}_deg.png"
-
-      data_to_plot = {
+      patch_data = {
+          "patch_id": local_patch_idx,
+          "sam_rad": sam_rad,
+          "sam_deg": float(np.degrees(sam_rad)),
+          "mae": mae,
           "cube_gt": gt_hwc,
           "cube_predict": pred_hwc,
           "cube_msi": msi_hwc,
-          "cube_uncertainty": unc_hwc,
-          "model name": f"{prefix} — Scène {scene_id} (Patch {p_id})",
-          "img_mae": mae,
-          "img_sam": sam_rad,
       }
 
-      visualise_synthesis_uncertainty(
+      if scene_id not in scenes_dict:
+        scenes_dict[scene_id] = []
+      scenes_dict[scene_id].append(patch_data)
+
+  
+  print(
+      f"\n [2/2] Génération et envoi des planches d'extrêmes sur WandB ({n_best} Best + {n_worst} Worst)..."
+  )
+
+  for scene_id, patches in scenes_dict.items():
+    # Tri des patchs de la scène du plus grand SAM (pire) au plus petit SAM (meilleur)
+    patches.sort(key=lambda x: x["sam_rad"], reverse=True)
+
+    # Sélection des N pires (au début du tableau trié)
+    worst_patches = patches[:n_worst]
+
+    # Sélection des N meilleurs (à la fin du tableau trié)
+    best_patches = patches[-n_best:]
+
+    # Combine la liste à logger
+    to_log = []
+    for rank, p in enumerate(worst_patches, start=1):
+      to_log.append((f"Pire_#{rank}", p))
+    for rank, p in enumerate(reversed(best_patches), start=1):
+      to_log.append((f"Meilleur_#{rank}", p))
+
+    # Génération et envoi des figures à WandB
+    for label, item in to_log:
+      save_name = (
+          f"Scene_{scene_id}_{label}_Patch_{item['patch_id']}_SAM_{item['sam_deg']:.2f}_deg.png"
+      )
+
+      data_to_plot = {
+          "cube_gt": item["cube_gt"],
+          "cube_predict": item["cube_predict"],
+          "cube_msi": item["cube_msi"],
+          "model name": (
+              f"{prefix}_Scène {scene_id} — {label} (Patch {item['patch_id']})"
+          ),
+          "img_mae": item["mae"],
+          "img_sam": item["sam_rad"],
+      }
+
+      # Appel de ta fonction mise à jour
+      visualise_synthesis(
           data=data_to_plot,
           save_name=save_name,
-          plot_dir=None,
+          plot_dir=None,  # Envoi direct WandB
           kept_indices=kept_indices,
           log_to_wandb=True,
       )
 
-      found_patches[scene_id].add(p_id)
-      found_count += 1
+  print(
+      "✅ Évaluation terminée ! Toutes les planches sont disponibles sur WandB"
+      " sous la section 'synthesis_plots/'.")
 
-  print("✅ Log des patchs fixes terminé en un éclair !")
+
+
 
 
 def main():
-  parser = argparse.ArgumentParser()
-  parser.add_argument('--config', type=str, default='src/config/config_uncertainty.yaml')
-  parser.add_argument('--override_epochs', type=int, default=None)
-  parser.add_argument('--override_lr', type=float, default=None)
-  parser.add_argument('--output_tag', type=str, default='')
-  args = parser.parse_args()
+    """Fonction principale d'entraînement."""
+    parser = argparse.ArgumentParser(
+        description="Entraîne le modèle résiduel MSI→HSI depuis une config YAML"
+    )
+    
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="src/config/config_default_unet_res.yaml",
+        help="Chemin vers le fichier de config YAML"
+    )
+    parser.add_argument(
+        "--override_epochs",
+        type=int,
+        default=None,
+        help="Override le nombre d'epochs"
+    )
+    parser.add_argument(
+        "--override_lr",
+        type=float,
+        default=None,
+        help="Override le learning rate"
+    )
+    parser.add_argument(
+        "--output_tag",
+        type=str,
+        default="",
+        help="Tag additionnel pour le nom du run"
+    )
+    
+    args = parser.parse_args()
 
-  config = load_config(args.config)
-  if args.override_epochs: config['training']['epochs'] = args.override_epochs
-  if args.override_lr: config['training']['lr'] = args.override_lr
+    # === CHARGEMENT DE LA CONFIG ===
+    config = load_config(args.config)
+    
+    if args.override_epochs:
+        config["training"]["epochs"] = args.override_epochs
+    if args.override_lr:
+        config["training"]["lr"] = args.override_lr
+    
+    print(f"\n{'='*60}")
+    print(f"CONFIG CHARGÉE : {args.config}")
+    print(f"{'='*60}\n")
 
-  set_seed(config.get('experiment', {}).get('seed', 42))
-  device = get_device()
-  use_amp = config['training'].get('use_amp', True) and device.type == 'cuda'
-  scaler = torch.amp.GradScaler(enabled=bool(use_amp)) if use_amp else None
-  kept_indices = get_kept_wavelength_indices(WVL_PRS, config)
+    # === INITIALISATION ===
 
-  train_loader, val_loader, test_loader = create_data_loaders_spectral(
-      train_dir=config['data']['data_dir_train'],
-      val_dir=config['data']['data_dir_val'],
-      test_dir=config['data']['data_dir_test'],
-      simulated=config['data']['simulated'],
-      augment=config['data']['augment'],
-      augment_illumination=config['data']['augment_illumination'],
-      batch_size=config['data']['batch_size'],
-      num_workers=config['data']['num_workers'],
-      is_residual=config['data']['is_residual'],
-      is_normalised=config['data']['is_normalised'],
-      kept_indices=kept_indices,
-  )
+    seed_val = config.get("experiment", {}).get("seed", 42)
+    set_seed(seed_val)  
+    device = get_device()
+    
+    # 2. Config AMP (Précision Mixte)
+    use_amp = config["training"].get("use_amp", True) and device.type == "cuda"
+    scaler = torch.amp.GradScaler( enabled=use_amp) if use_amp else None
+    print(f"⚡ Précision mixte (AMP) : {'ACTIVÉE' if use_amp else 'DÉSACTIVÉE'}")
 
-  # 🟢 Pré-sélection des patchs fixes par scène AVANT l'entraînement
-  fixed_val_patches = get_fixed_random_patches(val_loader, n_per_scene=2, seed=42)
-  fixed_test_patches = get_fixed_random_patches(test_loader, n_per_scene=2, seed=42)
+    kept_indices = get_kept_wavelength_indices(WVL_PRS, config)
 
-  sample_x, _, sample_y, _ = next(iter(train_loader))
-  n_msi, n_hsi = sample_x.shape[1], sample_y.shape[1]
+    print(f"Bandes conservées : {kept_indices.sum()} / {len(WVL_PRS)} "
+    f"({len(WVL_PRS) - kept_indices.sum()} bandes filtrées)")
+    
+    # 3. Data loaders
+    print(" Création des dataloaders...")
 
-  model_reconstruction = build_model_reconstruction(config['model_reconstruction'], n_msi, n_hsi).to(device)
-  rec_ckpt = Path(config['model_reconstruction'].get('load_model', 'checkpoints/best_model_rec.pth'))
-  
-  if rec_ckpt.exists():
-    state_dict = {k.replace('module.', ''): v for k, v in torch.load(rec_ckpt, map_location=device, weights_only=True).items()}
-    model_reconstruction.load_state_dict(state_dict, strict=True)
-    model_reconstruction.eval()
-    for param in model_reconstruction.parameters(): param.requires_grad = False
-  else:
-    raise FileNotFoundError(f"❌ Checkpoint non trouvé : {rec_ckpt}")
+    train_loader, val_loader, test_loader = create_data_loaders_spectral(
+    train_dir=config["data"]["data_dir_train"],val_dir=config["data"]["data_dir_val"],test_dir=config["data"]["data_dir_test"],
+    simulated=config["data"]["simulated"],
+    augment=config["data"]["augment"], 
+    augment_illumination=config["data"]["augment_illumination"],
+    batch_size=config["data"]["batch_size"],
+    num_workers=config["data"]["num_workers"],
+    is_residual=config["data"]["is_residual"],
+    is_normalised=config["data"]["is_normalised"],
+    kept_indices=kept_indices  
+)
+    # 4. Vérification des dimensions
+    sample_x, sample_x_interp, sample_y, _ = next(iter(train_loader))
+    n_msi = sample_x.shape[1]
+    n_hsi = sample_y.shape[1]
+    print(
+    f" MSI shape: {sample_x.shape} | HSI Interp shape: {sample_x_interp.shape} |"
+    f" HSI shape: {sample_y.shape}"
+    )
 
-  model_uncertainty = build_model_uncertainty(config['model_uncertainty'], n_msi, n_hsi).to(device)
-  
-  criterion = L1_uncertainty()
-  optimizer = build_optimizer(config, model_uncertainty.parameters())
-  scheduler = build_lr_scheduler(optimizer, config)
-  run_name = build_run_name_uncertainty(config) + '_UNCERTAINTY' + (f'_{args.output_tag}' if args.output_tag else '')
-  run_name_wb = init_wandb(config, run_name=run_name)
+    # 5. Modèle
+    print("  Instanciation du modèle...")
+    model = build_model(config, n_msi, n_hsi).to(device)
+    
+    if config["model"]["load_model"]:
+        checkpoint_path = Path(config["model"]["load_model"])
+        if checkpoint_path.exists():
+            state_dict = torch.load(checkpoint_path, map_location=device)
+            state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+            model.load_state_dict(state_dict, strict=True)
+            print(f"Modèle chargé depuis {checkpoint_path}")
+        else:
+            print(f"  Checkpoint non trouvé : {checkpoint_path}")
+    
+    # 6. Critère de perte
+    print(" Instanciation de la loss...")
+    criterion = SpectralLoss(
+        lambda_sam=config["training"]["lambda_sam"],
+        lambda_mae=config["training"]["lambda_mae"],
+        lambda_mse=config["training"]["lambda_mse"]
+    ).to(device)
 
-  best_val_loss = float('inf')
-  early_stopper = EarlyStopping(patience=config['training'].get('patience', 15), start_epoch=10)
+    # 7. Optimiseur & Scheduler
+    print("  Instanciation de l'optimiseur...")
+    optimizer = build_optimizer(config, model.parameters())
+    scheduler = build_lr_scheduler(optimizer, config)
 
-  for epoch in range(config['training']['epochs']):
-    train_metrics = train_one_epoch(model_reconstruction, model_uncertainty, train_loader, optimizer, criterion, device, scaler=scaler)
-    val_metrics = validate(model_reconstruction, model_uncertainty, val_loader, criterion, device, use_amp=use_amp)
+# 8. Initialisation W&B
+    print(" Initialisation de Weights & Biases...")
+    run_name = build_run_name(config)
+    if args.output_tag:
+        run_name = f"{run_name}_{args.output_tag}"
 
-    if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau): scheduler.step(val_metrics['val_loss_uncertainty'])
-    elif scheduler is not None: scheduler.step()
+    run_name_wb = init_wandb(config, run_name=run_name)
+    # === BOUCLE D'ENTRAÎNEMENT ===
+    print(f"\n{'='*60}")
+    print(f" DÉMARRAGE DE L'ENTRAÎNEMENT")
+    print(f"Run name: {run_name_wb}")
+    print(f"Epochs: {config['training']['epochs']}")
+    print(f"LR: {config['training']['lr']}")
+    print(f"{'='*60}\n")
 
-    wandb.log({'epoch': epoch + 1, **train_metrics, **val_metrics})
+    best_val_loss = float("inf")
+    #Early stopping
+    early_stopper = EarlyStopping(patience=15, min_delta=1e-4, start_epoch=10)
 
-    if val_metrics['val_loss_uncertainty'] < best_val_loss:
-      best_val_loss = val_metrics['val_loss_uncertainty']
-      save_checkpoint(model_uncertainty, config, run_name_wb, is_best=True)
-      
-      evaluate_and_log_uncertainty(
-          model_rec=model_reconstruction,
-          model_unc=model_uncertainty,
-          loader=val_loader,
-          device=device,
-          wvl_full=WVL_PRS,
-          kept_indices=kept_indices,
-          use_amp=use_amp,
-          fixed_target_patches=fixed_val_patches,
-          prefix="Val_best"
-      )
+    #ENTRAINEMENT
+    for epoch in range(config["training"]["epochs"]):
+        # Entraînement avec scaler passé en paramètre
+        
 
-    early_stopper(val_metrics['val_loss_uncertainty'], epoch=epoch + 1)
-    if early_stopper.early_stop: break
+        # 1. Exécution de l'entraînement et de la validation (récupération des dicts)
+        train_metrics = train_one_epoch(
+    model, train_loader, optimizer, criterion, device, scaler=scaler
+)
+        val_metrics = validate(
+    model,
+    val_loader,
+    criterion,
+    device,
+    use_amp=use_amp,
+    compute_full_metrics=True,
+)
 
-  # Test final
-  best_ckpt = get_project_root() / config['experiment']['output_dir'] / run_name_wb / 'best_model.pth'
-  if best_ckpt.exists(): model_uncertainty.load_state_dict(torch.load(best_ckpt, map_location=device, weights_only=True))
-  
-  test_metrics = test(model_reconstruction, model_uncertainty, test_loader, criterion, device, use_amp=use_amp)
-  wandb.log(test_metrics)
+# 2. Mise à jour du Scheduler de Learning Rate
+        current_lr = optimizer.param_groups[0]["lr"]
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(val_metrics["val_loss"])
+        else:
+            scheduler.step()
 
-  evaluate_and_log_uncertainty(
-      model_rec=model_reconstruction,
-      model_unc=model_uncertainty,
-      loader=test_loader,
-      device=device,
-      wvl_full=WVL_PRS,
-      kept_indices=kept_indices,
-      use_amp=use_amp,
-      fixed_target_patches=fixed_test_patches,
-      prefix="Test"
-  )
-  wandb.finish()
+# 3. Affichage console synthétique (en dB et degrés pour une meilleure lisibilité)
+        print(f"\n[Epoch {epoch+1}/{wandb.config['training']['epochs']}] — LR: {current_lr:.2e}")
+        print(
+    f"  Train → Loss: {train_metrics['train_loss']:.4f} | "
+    f"MAE: {train_metrics['train_mae']:.4f} | "
+    f"SAM: {train_metrics['train_sam_deg']:.2f}° | "
+    f"GradNorm: {train_metrics['train_grad_norm']:.2f}"
+    )
+        print(
+    f"  Val   → Loss: {val_metrics['val_loss']:.4f} | "
+    f"PSNR: {val_metrics['val_psnr']:.2f} dB | "
+    f"SAM: {val_metrics['val_sam_deg']:.2f}° | "
+    f"SSIM: {val_metrics.get('val_ssim', 0):.4f} | "
+    f"ERGAS: {val_metrics.get('val_ergas', 0):.2f}"
+    )
+
+# 4. Logging complet vers Weights & Biases (fusions des dictionnaires)
+        wandb.log({"epoch": epoch + 1, "lr": current_lr, **train_metrics, **val_metrics})
+        
+        # Sauvegarder le meilleur modèle
+        val_loss = val_metrics["val_loss"]
+        if val_loss < best_val_loss:
+          best_val_loss = val_loss
+          save_checkpoint(model, config, run_name_wb, is_best=True)
+
+          root = get_project_root()
+          checkpoint_path = (
+              root
+              / config["experiment"]["output_dir"]
+              / run_name_wb
+              / "best_model.pth"
+          )
+          artifact = wandb.Artifact(name=run_name_wb, type="model")
+          artifact.add_file(str(checkpoint_path))
+          wandb.log_artifact(artifact)
+          print(f"   Nouveau meilleur modèle sauvegardé !")
+
+          #  Génération des extrêmes de validation sur le val_loader
+          print(f"   📊 Génération des planches extrêmes (Val Epoch {epoch+1})...")
+          evaluate_and_log_extremes(
+              model=model,
+              loader=val_loader,  # On évalue sur le jeu de validation
+              device=device,
+              wvl_full=WVL_PRS,
+              kept_indices=kept_indices,
+              use_amp=use_amp,
+              n_worst=1,  # 1 pire par scène (pour aller vite)
+              n_best=1,  # 1 meilleur par scène
+              prefix=f"Val_Epoch_{epoch+1}",
+          )
+
+        early_stopper(val_loss, epoch=epoch + 1)
+
+        if early_stopper.early_stop:
+            print(
+        f"\n Arrêt précoce déclenché à l'époque {epoch+1} ! (Pas d'amélioration"
+        f" depuis {early_stopper.patience} époques)"
+        )
+            break
+
+    print(f"\n{'='*60}")
+    print(f" ENTRAÎNEMENT TERMINÉ")
+    print(f"{'='*60}\n")
+# === ÉVALUATION FINALE SUR LE TEST SET ===
+    print(f"\n{'='*60}")
+    print(" 🧪 ÉVALUATION FINALE (TEST SET)")
+    print(f"{'='*60}\n")
+
+# 1. Charger le meilleur checkpoint sauvegardé pendant l'entraînement
+    root = get_project_root()
+    best_ckpt = (root / config["experiment"]["output_dir"] / run_name_wb / "best_model.pth"
+)
+
+    if best_ckpt.exists():
+        model.load_state_dict(torch.load(best_ckpt, map_location=device))
+        print("   ✅ Meilleur checkpoint chargé pour l'évaluation.")
+    else:
+        print("   ⚠️ Checkpoint non trouvé, évaluation avec l'état actuel du modèle.")
+
+# 2. Métriques globales (Moyenne sur les 252 patchs)
+    test_metrics = test(model, test_loader, criterion, device, use_amp=use_amp)
+
+    print(
+    f"\n📊 Résultats Test Globaux : MAE={test_metrics['mae']:.6f} |"
+    f" MSE={test_metrics['mse']:.6f} | SAM={test_metrics['sam']:.4f} rad | PSNR={test_metrics['psnr']:.2f} dB | SSIM={test_metrics['ssim']:.4f} | ERGAS={test_metrics['ergas']:.2f}"
+    f" ({np.degrees(test_metrics['sam']):.2f}°)"
+    )
+
+# Log des métriques scalaires globales sur WandB
+    wandb.log({
+    "test/loss": test_metrics["loss"],
+    "test/mae": test_metrics["mae"],
+    "test/mse": test_metrics["mse"],
+    "test/rmse": test_metrics["rmse"],
+    "test/sam_rad": test_metrics["sam"],
+    "test/sam_deg": np.degrees(test_metrics["sam"]),
+    "test/psnr": test_metrics["psnr"],
+    "test/ssim": test_metrics["ssim"],
+    "test/ergas": test_metrics["ergas"],
+    })
+
+# 3. Génération & Envoi sur WandB des planches d'extrêmes (1 Best + 2 Worst par scène)
+    evaluate_and_log_extremes(
+    model=model,
+    loader=test_loader,
+    device=device,
+    wvl_full=WVL_PRS,
+    kept_indices=kept_indices,
+    use_amp=use_amp,
+    n_worst=2,  # 2 pires patchs
+    n_best=1,  # 1 meilleur patch
+    prefix="Test Final"
+    )
+
+    print(f"\n{'='*60}")
+    print(" 🚀 ENTRAÎNEMENT ET ÉVALUATION TERMINÉS")
+    print(f"{'='*60}\n")
+
+# Clôture propre du run WandB
+    wandb.finish()
 
 
-if __name__ == '__main__':
-  main()
+if __name__ == "__main__":
+    main()

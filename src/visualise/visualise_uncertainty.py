@@ -104,11 +104,10 @@ def visualise_synthesis_uncertainty(
     
     fig.suptitle(
         f"Planche de Synthèse — {clean_title}\n"
-        f"RMSE : {img_rmse:.4f} | MAE : {img_mae:.4f} | PSNR : {img_psnr:.2f} dB",
+        f"RMSE : {img_rmse:.4f} | MAE : {img_mae:.4f} | PSNR : {img_psnr:.2f} dB |SSIM : {img_ssim:.4f} | SAM : {img_sam:.2f}° | ERGAS : {img_ergas:.4f}",
         fontsize=14, weight="bold",
     )
-
-    # LIGNE 1 : Images RGB (Inchangé)
+# LIGNE 1 : Images RGB
     axes[0, 0].imshow(rgb_msi)
     axes[0, 0].set_title("RGB — Entrée MSI", fontsize=11, pad=6)
     axes[0, 0].axis("off")
@@ -122,23 +121,26 @@ def visualise_synthesis_uncertainty(
     axes[0, 2].axis("off")
 
     # LIGNE 2 : Incertitude, Erreur réelle, Différence
-    # 1. Incertitude
-    im_unc = axes[1, 0].imshow(unc_map, cmap="magma")
-    axes[1, 0].set_title("Incertitude Prédite", fontsize=11, pad=6)
+    # LIGNE 2 : Incertitude, Erreur réelle, Différence
+    
+    # 1. Incertitude (avec sa propre échelle de couleur)
+    vmax_unc = max(np.percentile(unc_map, 98), 0.01)
+    im_unc = axes[1, 0].imshow(unc_map, cmap="inferno", vmin=0, vmax=vmax_unc)
+    axes[1, 0].set_title("Incertitude Prédite | Min: {:.2f}, Max: {:.2f} | Mean: {:.2f}".format(np.min(unc_map), np.max(unc_map), np.mean(unc_map)), fontsize=11, pad=6)
     axes[1, 0].axis("off")
     fig.colorbar(im_unc, ax=axes[1, 0], fraction=0.046, pad=0.04)
 
-    # 2. Erreur Réelle (MAE)
+    # 2. Erreur Réelle (MAE) (avec sa propre échelle de couleur)
     vmax_mae = max(np.percentile(mae_map, 98), 0.01)
     im_mae = axes[1, 1].imshow(mae_map, cmap="inferno", vmin=0, vmax=vmax_mae)
-    axes[1, 1].set_title("Erreur Réelle (MAE)", fontsize=11, pad=6)
+    axes[1, 1].set_title("Erreur Réelle (MAE) | Min: {:.2f}, Max: {:.2f} | Mean: {:.2f}".format(np.min(mae_map), np.max(mae_map), np.mean(mae_map)), fontsize=11, pad=6)
     axes[1, 1].axis("off")
     fig.colorbar(im_mae, ax=axes[1, 1], fraction=0.046, pad=0.04)
 
     # 3. Différence
     v_diff = np.max(np.abs(diff_map))
     im_diff = axes[1, 2].imshow(diff_map, cmap="coolwarm", vmin=-v_diff, vmax=v_diff)
-    axes[1, 2].set_title("Différence (Incertitude - Erreur)", fontsize=11, pad=6)
+    axes[1, 2].set_title("Différence (Incertitude - Erreur) | Min: {:.2f}, Max: {:.2f} | Mean: {:.2f}".format(-v_diff, v_diff, np.mean(diff_map)), fontsize=11, pad=6)
     axes[1, 2].axis("off")
     fig.colorbar(im_diff, ax=axes[1, 2], fraction=0.046, pad=0.04)
 

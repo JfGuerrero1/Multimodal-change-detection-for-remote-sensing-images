@@ -2,7 +2,6 @@ import argparse
 import os
 from pathlib import Path
 import sys
-import tempfile
 
 # Ajoute la racine du projet au sys.path de Python
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
@@ -104,9 +103,7 @@ def build_model_reconstruction(
         final_activation=model_cfg.get('final_activation', None),
     )
   else:
-    raise ValueError(
-        f"❌ Modèle de reconstruction non reconnu : '{name}'"
-    )
+    raise ValueError(f"❌ Modèle de reconstruction non reconnu : '{name}'")
 
 
 def build_model_uncertainty(
@@ -123,7 +120,7 @@ def build_model_uncertainty(
         interpolation_mode=model_cfg.get('interpolation_mode', 'Bilinear'),
         activation=model_cfg.get('activation', 'silu'),
         final_op=model_cfg.get('final_activation', 'softplus'),
-        drop_out_rate=model_cfg.get('drop_out_rate', 0.1),
+        drop_out_rate=model_cfg.get('drop_out_rate', 0.0),
     )
   elif name in ['dualbranchnafnet', 'uncertainty_nafnet']:
     return DualBranchNAFNet(
@@ -316,6 +313,37 @@ def test(
   }
 
 
+
+def get_fixed_random_patches(loader, n_per_scene: int = 2, seed: int = 42) -> dict:
+    """Scanne le loader une seule fois pour pré-sélectionner N patchs par scène."""
+    scene_to_patches = {}
+    for _, _, _, patch_ids in loader:
+        for p_id in patch_ids:
+            # Correction : on vérifie la présence de .item() au lieu du type
+            p_id_val = p_id.item() if hasattr(p_id, 'item') else p_id
+            
+            # Détermination du scene_id
+            # On tente de convertir en int pour le calcul, sinon on traite comme string
+            try:
+                p_id_int = int(p_id_val)
+                scene_id = (p_id_int // 36) + 1
+            except (ValueError, TypeError):
+                # Fallback si l'ID n'est pas un nombre (ex: 'scene1_patch01')
+                scene_id = str(p_id_val).split("_")[1] if "_" in str(p_id_val) else "unknown"
+
+            if scene_id not in scene_to_patches:
+                scene_to_patches[scene_id] = []
+            if p_id_val not in scene_to_patches[scene_id]:
+                scene_to_patches[scene_id].append(p_id_val)
+
+    rng = np.random.default_rng(seed)
+    fixed_targets = {}
+    for scene_id, p_ids in scene_to_patches.items():
+        k = min(n_per_scene, len(p_ids))
+        fixed_targets[scene_id] = list(rng.choice(p_ids, size=k, replace=False))
+    return fixed_targets
+
+
 @torch.no_grad()
 def evaluate_and_log_uncertainty(
     model_rec: torch.nn.Module,
@@ -325,117 +353,99 @@ def evaluate_and_log_uncertainty(
     wvl_full: np.ndarray,
     kept_indices: np.ndarray = None,
     use_amp: bool = False,
-    n_worst: int = 2,
-    n_best: int = 1,
-    prefix: str = "Val Best",
+    fixed_target_patches: dict = None,
+    prefix: str = "Val",
 ):
-  """Évalue les modèles et gère les pires/meilleurs patchs via un stockage
-
-  disque temporaire pour éviter toute saturation de la RAM (OOM).
-  """
+  """Inférence ultra-rapide : ne traite et log que les patchs fixes pré-sélectionnés."""
   model_rec.eval()
   model_unc.eval()
+  if not fixed_target_patches:
+    return
 
-  with tempfile.TemporaryDirectory() as tmpdir:
-    scenes_dict = {}
-    patch_counter = 0
+  found_patches = {scene_id: set() for scene_id in fixed_target_patches.keys()}
+  total_to_find = sum(len(v) for v in fixed_target_patches.values())
+  found_count = 0
 
-    print("\n🔍 [1/2] Inférence et sauvegarde sur disque temporaire...")
+  print(f"\n Log ultra-rapide des {total_to_find} patchs fixes ({prefix})...")
 
-    for x_init, x_interp, y, patch_ids in tqdm(loader, desc="Inférence"):
-      x_init = x_init.to(device, non_blocking=True)
-      x_interp = x_interp.to(device, non_blocking=True)
-      y = y.to(device, non_blocking=True)
+  for x_init, x_interp, y, patch_ids in loader:
+    if found_count >= total_to_find:
+      break  # Arrêt immédiat dès que tous les patchs cibles sont trouvés
 
-      with torch.amp.autocast(device_type="cuda", enabled=bool(use_amp)):
-        pred = model_rec(x_init, x_interp)
-        unc_input = torch.cat([x_init, pred], dim=1)
-        u_hat = model_unc(unc_input)
+    batch_size = y.size(0)
+    batch_indices_to_process = []
 
-      pred_np = pred.detach().cpu().numpy()
-      y_np = y.detach().cpu().numpy()
-      x_init_np = x_init.detach().cpu().numpy()
-      u_hat_np = u_hat.detach().cpu().numpy()
+    for i in range(batch_size):
+      raw_id = patch_ids[i]
+      p_id = raw_id.item() if hasattr(raw_id, 'item') else raw_id
+      
+      try:
+          p_id_int = int(p_id)
+          scene_id = (p_id_int // 36) + 1
+      except (ValueError, TypeError):
+          scene_id = str(p_id).split("_")[1] if "_" in str(p_id) else "unknown"
 
-      batch_size = y.size(0)
+      if scene_id in fixed_target_patches and p_id in fixed_target_patches[scene_id]:
+        if p_id not in found_patches[scene_id]:
+          batch_indices_to_process.append((i, p_id, scene_id))
 
-      for i in range(batch_size):
-        p_id = (patch_ids[i] if isinstance(patch_ids, list) else patch_ids[i].item())
-        scene_id = (p_id // 36) + 1 if isinstance(p_id, int) else str(p_id).split("_")[1]
+    if not batch_indices_to_process:
+      continue
 
-        gt_hwc = np.moveaxis(y_np[i], 0, -1) if y_np[i].shape[0] < y_np[i].shape[-1] else y_np[i]
-        pred_hwc = np.moveaxis(pred_np[i], 0, -1) if pred_np[i].shape[0] < pred_np[i].shape[-1] else pred_np[i]
-        msi_hwc = np.moveaxis(x_init_np[i], 0, -1) if x_init_np[i].shape[0] < x_init_np[i].shape[-1] else x_init_np[i]
-        unc_hwc = np.moveaxis(u_hat_np[i], 0, -1) if u_hat_np[i].shape[0] < u_hat_np[i].shape[-1] else u_hat_np[i]
+    x_init_b = x_init.to(device, non_blocking=True)
+    x_interp_b = x_interp.to(device, non_blocking=True)
+    y_b = y.to(device, non_blocking=True)
 
-        mae = float(np.mean(np.abs(gt_hwc - pred_hwc)))
+    with torch.amp.autocast(device_type="cuda", enabled=bool(use_amp)):
+      pred = model_rec(x_init_b, x_interp_b)
+      unc_input = torch.cat([x_init_b, pred], dim=1)
+      u_hat = model_unc(unc_input)
 
-        dot = np.sum(pred_hwc * gt_hwc, axis=-1)
-        norm_p = np.linalg.norm(pred_hwc, axis=-1)
-        norm_g = np.linalg.norm(gt_hwc, axis=-1)
-        sam_map = np.arccos(np.clip(dot / (norm_p * norm_g + 1e-8), -1.0, 1.0))
-        sam_rad = float(np.mean(sam_map))
+    pred_np = pred.detach().cpu().numpy()
+    y_np = y_b.detach().cpu().numpy()
+    x_init_np = x_init_b.detach().cpu().numpy()
+    u_hat_np = u_hat.detach().cpu().numpy()
 
-        temp_file_path = os.path.join(tmpdir, f"patch_{patch_counter}.npz")
-        np.savez_compressed(
-            temp_file_path,
-            cube_gt=gt_hwc,
-            cube_predict=pred_hwc,
-            cube_msi=msi_hwc,
-            cube_uncertainty=unc_hwc
-        )
+    for idx_batch, p_id, scene_id in batch_indices_to_process:
+      if p_id in found_patches[scene_id]:
+        continue
 
-        patch_data = {
-            "patch_id": p_id,
-            "sam_rad": sam_rad,
-            "sam_deg": float(np.degrees(sam_rad)),
-            "mae": mae,
-            "file_path": temp_file_path
-        }
+      gt_hwc = np.moveaxis(y_np[idx_batch], 0, -1) if y_np[idx_batch].shape[0] < y_np[idx_batch].shape[-1] else y_np[idx_batch]
+      pred_hwc = np.moveaxis(pred_np[idx_batch], 0, -1) if pred_np[idx_batch].shape[0] < pred_np[idx_batch].shape[-1] else pred_np[idx_batch]
+      msi_hwc = np.moveaxis(x_init_np[idx_batch], 0, -1) if x_init_np[idx_batch].shape[0] < x_init_np[idx_batch].shape[-1] else x_init_np[idx_batch]
+      unc_hwc = np.moveaxis(u_hat_np[idx_batch], 0, -1) if u_hat_np[idx_batch].shape[0] < u_hat_np[idx_batch].shape[-1] else u_hat_np[idx_batch]
 
-        if scene_id not in scenes_dict:
-          scenes_dict[scene_id] = []
-        scenes_dict[scene_id].append(patch_data)
-        patch_counter += 1
+      mae = float(np.mean(np.abs(gt_hwc - pred_hwc)))
+      dot = np.sum(pred_hwc * gt_hwc, axis=-1)
+      norm_p = np.linalg.norm(pred_hwc, axis=-1)
+      norm_g = np.linalg.norm(gt_hwc, axis=-1)
+      sam_map = np.arccos(np.clip(dot / (norm_p * norm_g + 1e-8), -1.0, 1.0))
+      sam_rad = float(np.mean(sam_map))
 
-    print(f"\n[2/2] Sélection des extrêmes et envoi sur WandB...")
+      save_name = f"{prefix}_Scene_{scene_id}_Patch_{p_id}_SAM_{np.degrees(sam_rad):.2f}_deg.png"
 
-    for scene_id, patches in scenes_dict.items():
-      patches.sort(key=lambda x: x["sam_rad"], reverse=True)
+      data_to_plot = {
+          "cube_gt": gt_hwc,
+          "cube_predict": pred_hwc,
+          "cube_msi": msi_hwc,
+          "cube_uncertainty": unc_hwc,
+          "model name": f"{prefix} — Scène {scene_id} (Patch {p_id})",
+          "img_mae": mae,
+          "img_sam": sam_rad,
+      }
 
-      worst_patches = patches[:n_worst]
-      best_patches = patches[-n_best:]
+      visualise_synthesis_uncertainty(
+          data=data_to_plot,
+          save_name=save_name,
+          plot_dir=None,
+          kept_indices=kept_indices,
+          log_to_wandb=True,
+      )
 
-      to_log = []
-      for rank, p in enumerate(worst_patches, start=1):
-        to_log.append((f"Pire_#{rank}", p))
-      for rank, p in enumerate(reversed(best_patches), start=1):
-        to_log.append((f"Meilleur_#{rank}", p))
+      found_patches[scene_id].add(p_id)
+      found_count += 1
 
-      for label, item in to_log:
-        loaded = np.load(item["file_path"])
-
-        save_name = f"Scene_{scene_id}_{label}_Patch_{item['patch_id']}_SAM_{item['sam_deg']:.2f}_deg.png"
-
-        data_to_plot = {
-            "cube_gt": loaded["cube_gt"],
-            "cube_predict": loaded["cube_predict"],
-            "cube_msi": loaded["cube_msi"],
-            "cube_uncertainty": loaded["cube_uncertainty"],
-            "model name": f"{prefix}_Scène {scene_id} — {label} (Patch {item['patch_id']})",
-            "img_mae": item["mae"],
-            "img_sam": item["sam_rad"],
-        }
-
-        visualise_synthesis_uncertainty(
-            data=data_to_plot,
-            save_name=save_name,
-            plot_dir=None,
-            kept_indices=kept_indices,
-            log_to_wandb=True,
-        )
-
-  print("✅ Évaluation par scène terminée sans saturer la RAM !")
+  print("✅ Log des patchs fixes terminé en un éclair !")
 
 
 def main():
@@ -469,6 +479,10 @@ def main():
       is_normalised=config['data']['is_normalised'],
       kept_indices=kept_indices,
   )
+
+  # 🟢 Pré-sélection des patchs fixes par scène AVANT l'entraînement
+  fixed_val_patches = get_fixed_random_patches(val_loader, n_per_scene=2, seed=42)
+  fixed_test_patches = get_fixed_random_patches(test_loader, n_per_scene=2, seed=42)
 
   sample_x, _, sample_y, _ = next(iter(train_loader))
   n_msi, n_hsi = sample_x.shape[1], sample_y.shape[1]
@@ -516,6 +530,7 @@ def main():
           wvl_full=WVL_PRS,
           kept_indices=kept_indices,
           use_amp=use_amp,
+          fixed_target_patches=fixed_val_patches,
           prefix="Val_best"
       )
 
@@ -537,6 +552,7 @@ def main():
       wvl_full=WVL_PRS,
       kept_indices=kept_indices,
       use_amp=use_amp,
+      fixed_target_patches=fixed_test_patches,
       prefix="Test"
   )
   wandb.finish()
