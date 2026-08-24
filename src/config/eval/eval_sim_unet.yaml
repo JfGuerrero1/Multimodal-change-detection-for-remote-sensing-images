@@ -1,0 +1,43 @@
+# ==========================================
+# CONFIGURATION D'ÉVALUATION
+# ==========================================
+evaluation:
+  output_dir: "results/evaluation_report_sim_unet_"
+  model_name: "GradualExpansionUNet"
+  weights_path: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/filtered_clean_unet_sim/gradualexpansionunet_sim_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual_filtered_clean/best_model.pth"
+
+# Configuration de l'architecture du modèle
+model:
+  name: "gradualexpansionunet"
+  base_channel: 64
+  interpolation_mode: "Bilinear"
+  activation: "silu"
+  with_batch_norm: true
+  with_mlp_spectral: false
+  final_activation: null
+
+# Configuration des données
+data:
+  task: "spectral"
+  simulated: true
+  n_msi: 12                       # Nombre de canaux MSI (entrée)
+  n_hsi: 195                       # Nombre de canaux HSI (sortie/vérité terrain)
+  batch_size: 8
+  num_workers: 4
+  augment: false                  # Désactivé pour l'évaluation
+  augment_illumination: false     # Désactivé pour l'évaluation
+  is_normalised: false
+  is_residual: false              # Mettre true si ton modèle utilise des résidus
+  
+  # Chemins des dossiers de données
+  data_dir_train: "data/patches_caches/train-clean" # Requis par la fonction du dataloader
+  data_dir_val: "data/patches_caches/val-clean"     # Requis par la fonction du dataloader
+  data_dir_test: "data/patches_caches/test-clean"   # Dossier principal utilisé pour l'évaluation
+
+wavelength_filtering:
+  enabled: true
+  # Liste des fenêtres atmosphériques (en nm) à retirer
+  excluded_windows:
+    - [1350, 1500]
+    - [1800, 2000]
+  excluded_bands: []

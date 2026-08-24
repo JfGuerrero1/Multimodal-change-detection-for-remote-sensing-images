@@ -1,0 +1,58 @@
+# ==========================================
+# CONFIGURATION D'ÉVALUATION
+# ==========================================
+evaluation:
+  output_dir: "results/uncertainty_residual_normalised_nll"
+  model_name: "GradualExpansionUNet_res"
+  
+  # Chemins vers les poids des modèles
+  weights_path_reconstruction: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/filtered_clean_normalised/gradualexpansionunet_res_real_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual_filtered_clean_normalised/best_model.pth"
+  weights_path_uncertainty: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/uncertainty_dualbranchnafnet_run_nll/dualbranchnafnet_ch64_l1_loss_lr-0.0003_UNCERTAINTY/best_model.pth"
+  use_amp: true
+  log_to_wandb: false
+
+# Configuration du modèle de reconstruction
+model:
+  name: "gradualexpansionunet_res"
+  base_channel: 64
+  interpolation_mode: "Bilinear"
+  activation: "silu"
+  with_batch_norm: true
+  with_mlp_spectral: false
+  final_activation: null
+
+# Configuration du modèle d'incertitude (utilisé uniquement en mode uncertainty)
+model_uncertainty:
+  name: "dualbranchnafnet"
+  base_channel: 64
+  out_channels: 31
+  middle_blk_num: 1
+  enc_blk_nums: []
+  dec_blk_nums: []
+  drop_out_rate: 0.0
+  final_activation: "softplus"
+
+# Configuration des données
+data:
+  task: "spectral"
+  simulated: false
+  n_msi: 12                      # Nombre de canaux MSI (entrée)
+  n_hsi: 195                      # Nombre de canaux HSI (sortie)
+  batch_size: 8
+  num_workers: 4
+  augment: false                  # Désactivé pour l'évaluation
+  augment_illumination: false     # Désactivé pour l'évaluation
+  is_normalised: true
+  is_residual: true
+  
+  # Chemins des jeux de données
+  data_dir_train: "data/patches_caches/train-clean"
+  data_dir_val: "data/patches_caches/val-clean"
+  data_dir_test: "data/patches_caches/test-clean"
+wavelength_filtering:
+  enabled: true
+  # Liste des fenêtres atmosphériques (en nm) à retirer
+  excluded_windows:
+    - [1350, 1500]
+    - [1800, 2000]
+  excluded_bands: []

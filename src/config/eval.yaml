@@ -1,0 +1,52 @@
+# ==========================================
+# CONFIGURATION D'ÉVALUATION
+# ==========================================
+evaluation:
+  output_dir: "results/evaluation_report"
+  model_name: "GradualExpansionUNet"
+  
+  # Chemins vers les poids des modèles
+  weights_path_reconstruction: "checkpoints/filtered_clean_unet_sim/best_model.pth"
+  weights_path_uncertainty: "checkpoints/uncertainty_model/best_model.pth" # À renseigner si tu évalues l'incertitude
+  
+  use_amp: true
+  log_to_wandb: false
+
+# Configuration du modèle de reconstruction
+model:
+  name: "gradualexpansionunet"
+  base_channel: 64
+  interpolation_mode: "Bilinear"
+  activation: "silu"
+  with_batch_norm: true
+  with_mlp_spectral: false
+  final_activation: null
+
+# Configuration du modèle d'incertitude (utilisé uniquement en mode uncertainty)
+model_uncertainty:
+  name: "dualbranchnafnet"
+  base_channel: 64
+  out_channels: 31
+  middle_blk_num: 1
+  enc_blk_nums: []
+  dec_blk_nums: []
+  drop_out_rate: 0.0
+  final_activation: "softplus"
+
+# Configuration des données
+data:
+  task: "spectral"
+  simulated: true
+  n_msi: 4                        # Nombre de canaux MSI (entrée)
+  n_hsi: 31                       # Nombre de canaux HSI (sortie)
+  batch_size: 8
+  num_workers: 4
+  augment: false                  # Désactivé pour l'évaluation
+  augment_illumination: false     # Désactivé pour l'évaluation
+  is_normalised: false
+  is_residual: false
+  
+  # Chemins des jeux de données
+  data_dir_train: "data/patches_caches/train-clean"
+  data_dir_val: "data/patches_caches/val-clean"
+  data_dir_test: "data/patches_caches/test-clean"

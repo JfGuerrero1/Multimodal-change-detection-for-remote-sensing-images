@@ -65,3 +65,27 @@ class L1_uncertainty(nn.Module):
 
     def forward(self, u, error):
         return F.l1_loss(u, error)
+
+import torch
+import torch.nn as nn
+
+class LaplaceNLLLossDirect(nn.Module):
+    def __init__(self, eps=1e-6):
+        super(LaplaceNLLLossDirect, self).__init__()
+        self.eps = eps
+
+    def forward(self, U, error):
+        """
+        y_pred : Prédiction de la reconstruction (moyenne)
+        U      : Sortie d'incertitude représentant directement l'échelle (b)
+        y_true : Vérité terrain
+        """
+        # 1. Sécurité pour empêcher U d'être égal ou inférieur à 0 (évite division par zéro et log(0))
+        U_safe = torch.clamp(U, min=self.eps)
+        
+
+        
+        # 3. Formule de la NLL : log(U) + (E / U)
+        nll = torch.log(U_safe) + (error / U_safe)
+        
+        return torch.mean(nll)

@@ -1,0 +1,71 @@
+experiment:
+  name: "uncertainty_dualbranchnafnet_run"
+  seed: 42
+  project: "Multimodal-change-detection"
+  entity: "JfGuerrero"
+  output_dir: "checkpoints/uncertainty_dualbranchnafnet_run_nll"
+
+model_reconstruction:
+  name: "gradualexpansionunet_res"
+  base_channel: 64
+  interpolation_mode: "Bilinear"
+  activation: "silu"
+  augment: true
+  with_batch_norm: true
+  with_mlp_spectral: false
+  final_activation: null
+  load_model: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/filtered_clean_normalised/gradualexpansionunet_res_real_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual_filtered_clean_normalised/best_model.pth"        
+
+# Configuration du filtrage des longueurs d'onde
+wavelength_filtering:
+  enabled: true
+  # Liste des fenêtres atmosphériques (en nm) à retirer
+  excluded_windows:
+    - [1350, 1500]
+    - [1800, 2000]
+  excluded_bands: []
+
+model_uncertainty:
+  name: "dualbranchnafnet"
+  base_channel: 64
+  interpolation_mode: "Bilinear"
+  activation: "silu"
+  final_activation: "softplus"       # Garantit b > 0 pour le paramètre d'échelle Laplace
+  drop_out_rate: 0.0
+  load_model_uncertainty: null  # Modèle HSI gelé
+
+data:
+  task: "spectral"
+  simulated: false
+  augment: true                    
+  augment_illumination: false       
+  is_normalised: true
+  mask: null                       
+  is_residual: true                # true pour gradualexpansionunet_res (x_init, x_interp, y)
+  batch_size: 8
+  num_workers: 4
+  data_dir_train: "data/patches_caches/train-clean"
+  data_dir_val: "data/patches_caches/val-clean"
+  data_dir_test: "data/patches_caches/test-clean"
+
+training:
+  epochs: 100
+  lr: 0.0003                       
+  loss_type: "l1_loss"
+  scale_train_loss: 1.0            
+  optimizer_name: "adamw"          
+  weight_decay: 0.01               
+  
+  # Configuration du Scheduler
+  warm_up: true                    
+  warmup_epochs: 3                 
+  scheduler_type: "cosine_restarts" # Choix : "cosine_restarts", "cosine", "plateau"
+  
+  # Paramètres spécifiques (optionnels selon le type)
+  T_0: 50                          # Pour cosine_restarts
+  eta_min: 0.000001                # LR minimal
+  patience_plateau: 5              # Uniquement si scheduler_type: "plateau"
+
+  # Early Stopping
+  patience: 100                   
+  min_delta: 0.00001

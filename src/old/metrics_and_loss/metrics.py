@@ -35,15 +35,14 @@ def compute_mae(pred, target):
 
 import numpy as np
 
-
 def compute_ergas(
-    pred, target, sampling_ratio=1.0/3.0, min_val=1e-3, max_val=1.0
+    pred, target, sampling_ratio=1.0/3.0, min_val=1e-3, max_val=1.0, eval_indices=None
 ):
     """Calcul de l'ERGAS sécurisé pour des images (C, H, W) ou (H, W, C).
 
     - Nettoyage des NaN / Inf
     - Clamping strict dans [min_val, max_val]
-    - Calcul vectorisé par bande
+    - Option pour filtrer/exclure certaines bandes instables (ex: bords des zones d'absorption)
     """
     pred, target = ensure_chw(pred, target)
 
@@ -55,26 +54,38 @@ def compute_ergas(
     pred = np.nan_to_num(pred, nan=min_val, posinf=max_val, neginf=min_val)
     target = np.nan_to_num(target, nan=min_val, posinf=max_val, neginf=min_val)
 
-    # 3. Clamping striMultimodal-change-detection-for-remote-sensing-imagesct dans [1e-6, 1.0]
+    # 3. Clamping strict
     pred = np.clip(pred, min_val, max_val)
     target = np.clip(target, min_val, max_val)
 
-    num_channels = pred.shape[0]
+    # 4. Filtrage optionnel des bandes à évaluer (exclure les bords de bandes d'absorption)
+    if eval_indices is not None:
+        pred = pred[eval_indices, :, :]
+        target = target[eval_indices, :, :]
 
-    # 4. Calcul vectorisé du RMSE et des moyennes par bande (axes H, W)
+    num_channels = pred.shape[0]
+    if num_channels == 0:
+        return 0.0
+
+    # 5. Calcul vectorisé du RMSE et des moyennes par bande (axes H, W)
     rmse_per_band = np.sqrt(np.mean((pred - target) ** 2, axis=(1, 2)))
     mean_target_per_band = np.maximum(
         np.mean(target, axis=(1, 2)), min_val
     )  # Sécurité division par zéro
 
-    # 5. Ratio et formule ERGAS
+    # 6. Ratio et formule ERGAS
     ratios = rmse_per_band / mean_target_per_band
     sum_ratio = np.sum(ratios**2)
 
     ergas = 100.0 * sampling_ratio * np.sqrt((1.0 / num_channels) * sum_ratio)
 
-    return float(ergas)
+    float_ergas = float(ergas)
+    
+    # Sécurité supplémentaire contre les valeurs aberrantes
+    if np.isnan(float_ergas) or np.isinf(float_ergas):
+        return 0.0
 
+    return float_ergas
 
 def compute_ssim_multiband(pred, target):
     """Calcul du SSIM moyen sur l'ensemble des bandes (format scikit-image)."""

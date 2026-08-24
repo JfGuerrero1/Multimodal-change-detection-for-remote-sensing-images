@@ -384,76 +384,108 @@ def stat_dico(patch_hsi, patch_msi, patch_dw, patch_name, date_df,
         **ratio
     }
 
-def trace_spectre(patch):
-    # 1. On s'assure d'avoir le format (H, W, C) pour extraire les pixels proprement
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
 
-
-    # Détection des pixels morts (où la réflectance vaut 0 sur les bandes 5 à 40)
-    zeros_mask_visible = (patch[:, :, 5:40] == 0)
-    # On cherche les coordonnées (y, x) où AU MOINS une bande est à 0 dans cette zone
-    y_indices, x_indices = np.where(np.any(zeros_mask_visible, axis=2))
+def trace_spectre(patch, y_indices, x_indices, scene="scene_inconnue", output_dir_diag=None, wvl_prs=None):
+    """
+    Trace une vue RGB avec des marqueurs pour une liste de points (y_indices, x_indices) 
+    et leurs spectres associés.
     
-    if len(y_indices) == 0:
-        print("Aucun pixel mort détecté dans la zone visible spécifiée.")
-    
-    y_indices=[i for i in range(450,400,-10)]
-    x_indices=[i for i in range(180,230,10)]
-    # Palette de couleurs distinctes pour faire correspondre la carte et le graphique
-    colors = ['#FF1493', '#00FFFF', '#FFFF00', '#00FF00', '#FF4500'] # Rose, Cyan, Jaune, Vert, Orange
+    Paramètres :
+    -----------
+    patch : np.ndarray
+        Le cube hyperspectral au format (H, W, C).
+    y_indices : list ou np.ndarray
+        Liste des coordonnées Y (lignes) des pixels à tracer.
+    x_indices : list ou np.ndarray
+        Liste des coordonnées X (colonnes) des pixels à tracer.
+    scene : str
+        Nom de la scène ou du patch (pour la sauvegarde).
+    output_dir_diag : Path ou str, optionnel
+        Dossier de sauvegarde.
+    wvl_prs : np.ndarray, optionnel
+        Vecteur des longueurs d'onde (WVL).
+    """
+    if output_dir_diag is not None:
+        output_dir_diag = Path(output_dir_diag)
+        output_dir_diag.mkdir(parents=True, exist_ok=True)
 
-    # 2. Création de la figure avec 2 sous-graphiques côte à côte
+    H, W, C = patch.shape
+    num_pixels = len(y_indices)
+    
+    if num_pixels == 0:
+        print("Aucun point à tracer (listes vides).")
+        return
+
+    # Création de la figure avec 2 sous-graphiques côte à côte
     fig, axes = plt.subplots(1, 2, figsize=(16, 7), gridspec_kw={'width_ratios': [1, 1.2]})
     
-    
     ax_rgb = axes[0]
-    im_rgb = get_rgb_from_patch(patch.transpose(2,0,1), is_prisma=True) # Adapte selon ta fonction
+    
+    # Extraction de la vue RGB (adapte get_rgb_from_patch si besoin)
+    try:
+        im_rgb = get_rgb_from_patch(patch.transpose(2, 0, 1), is_prisma=True)
+    except NameError:
+        # Fallback simple si la fonction n'est pas définie dans ce scope
+        im_rgb = patch[:, :, [3, 2, 1]] 
+        im_rgb = np.clip(im_rgb / (np.percentile(im_rgb, 98) + 1e-8), 0, 1)
+
     ax_rgb.imshow(im_rgb)
-    ax_rgb.set_title("Vue RGB & Localisation des Pixels ", fontsize=12, fontweight='bold')
-    ax_rgb.axis('on') # 'on' permet de voir les coordonnées (y, x) sur les axes pour se repérer
+    ax_rgb.set_title(f"Vue RGB & Localisation ({num_pixels} pixels)", fontsize=12, fontweight='bold')
+    ax_rgb.axis('on') 
 
-    
     ax_spec = axes[1]
-    bandes = WVL_PRS 
+    bandes = wvl_prs if wvl_prs is not None else np.arange(C)
 
-    # 3. Boucle pour tracer les spectres et les points correspondants
-    num_pixels_to_show=len(y_indices)
-    for i in range(num_pixels_to_show):
+    # Palette de couleurs dynamique selon le nombre de points
+    colors = plt.cm.rainbow(np.linspace(0, 1, num_pixels))
+
+    # Boucle sur les points fournis en entrée
+    for i in range(num_pixels):
         y, x = y_indices[i], x_indices[i]
+        
+        # Sécurité pour éviter les dépassements d'index
+        if not (0 <= y < H and 0 <= x < W):
+            print(f"Attention : Le point (y={y}, x={x}) est hors limites du patch ({H}x{W}), ignoré.")
+            continue
+            
         spectre = patch[y, x, :]
-        color = colors[i % len(colors)]
+        color = colors[i]
         
-        # Sur la vue RGB, on place un marqueur coloré sur le pixel mort
+        # Marqueur sur la vue RGB
         ax_rgb.scatter(x, y, color=color, edgecolors='black', s=100, marker='o', 
-                       label=f"Pixel {i+1} (y={y}, x={x})")
+                       label=f"P{i+1} ({y}, {x})")
         
-        # Sur le graphique, on trace la courbe spectrale avec la MEME couleur
-        ax_spec.plot(bandes, spectre, color=color, linestyle='-', linewidth=2,
-                     label=f"Pixel {i+1} (y={y}, x={x})")
+        # Courbe spectrale correspondante
+        ax_spec.plot(bandes, spectre, color=color, linestyle='-', linewidth=1.5,
+                     label=f"P{i+1}")
 
-    # 4. Habillage et mise en forme du graphique spectral
-    
-    wvl_start, wvl_end = bandes[5], bandes[40]
-    ax_spec.axvspan(wvl_start, wvl_end, color='gray', alpha=0.15, label="Zone Visible Analysée")
+    # Habillage du graphique spectral
+    if len(bandes) > 40:
+        wvl_start, wvl_end = bandes[5], bandes[min(40, len(bandes)-1)]
+        ax_spec.axvspan(wvl_start, wvl_end, color='gray', alpha=0.15, label="Zone Analysée")
 
-    ax_spec.set_title("Signatures Spectrales des Pixels Morts", fontsize=12, fontweight='bold')
+    ax_spec.set_title("Signatures Spectrales des Pixels Sélectionnés", fontsize=12, fontweight='bold')
     ax_spec.set_xlabel("Longueur d'onde (nm)", fontsize=11)
     ax_spec.set_ylabel("Réflectance", fontsize=11)
-    ax_spec.set_ylim(-0.05, 1.05)
     ax_spec.grid(True, linestyle='--', alpha=0.5)
     
-    # Gestion des légendes uniques pour les deux subplots
-    ax_rgb.legend(loc='upper right', fontsize=9)
-    ax_spec.legend(loc='upper right', fontsize=9)
+    # Légendes (ajustées pour ne pas surcharger si tu as beaucoup de points)
+    ax_rgb.legend(loc='upper right', fontsize=8, ncol=2 if num_pixels > 6 else 1)
+    ax_spec.legend(loc='upper right', fontsize=8, ncol=2 if num_pixels > 6 else 1)
 
     plt.tight_layout()
     
-    # Sauvegarde et affichage
-    output_plot = OUTPUT_DIR_DIAG / f"spectre_{scene}.png"
-    plt.savefig(output_plot, dpi=300, bbox_inches='tight')
-    print(output_plot)
+    # Sauvegarde
+    if output_dir_diag is not None:
+        output_plot = output_dir_diag / f"spectre_{scene}.png"
+        plt.savefig(output_plot, dpi=300, bbox_inches='tight')
+        print(f"[Succès] Graphique sauvegardé : {output_plot}")
+    
     plt.show()
-    plt.close() # Remplaçant de plt.clean() qui n'existe pas en matplotlib standard
-
+    plt.close()
 
 def plot_patch_spatial_gradient(patch_hsi,scene):
     """

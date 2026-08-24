@@ -7,15 +7,16 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
 import numpy as np
-from scipy.stats import spearmanr
+from scipy.stats import laplace, spearmanr
 import torch
 import torch.nn.functional as F
 import torch.optim.lr_scheduler as lr_scheduler
 from tqdm import tqdm
 import wandb
+import matplotlib.pyplot as plt
 
 from src.constants import WVL_PRS
-from src.metrics_and_loss.loss import L1_uncertainty
+from src.old.metrics_and_loss.loss import L1_uncertainty,LaplaceNLLLossDirect
 from src.models import (
     DualBranchNAFNet,
     DualBranchUNet,
@@ -313,23 +314,21 @@ def test(
   }
 
 
-
 def get_fixed_random_patches(loader, n_per_scene: int = 2, seed: int = 42) -> dict:
     """Scanne le loader une seule fois pour pré-sélectionner N patchs par scène."""
     scene_to_patches = {}
     for _, _, _, patch_ids in loader:
         for p_id in patch_ids:
-            # Correction : on vérifie la présence de .item() au lieu du type
             p_id_val = p_id.item() if hasattr(p_id, 'item') else p_id
+            p_str = str(p_id_val)
             
-            # Détermination du scene_id
-            # On tente de convertir en int pour le calcul, sinon on traite comme string
-            try:
-                p_id_int = int(p_id_val)
-                scene_id = (p_id_int // 36) + 1
-            except (ValueError, TypeError):
-                # Fallback si l'ID n'est pas un nombre (ex: 'scene1_patch01')
-                scene_id = str(p_id_val).split("_")[1] if "_" in str(p_id_val) else "unknown"
+            # Extraction propre du nom de la scène (ex: "beheira_after_patch_27" -> "beheira_after")
+            if "_patch_" in p_str:
+                scene_id = p_str.rsplit("_patch_", 1)[0]
+            elif "_" in p_str:
+                scene_id = "_".join(p_str.split("_")[:-1])
+            else:
+                scene_id = "unknown"
 
             if scene_id not in scene_to_patches:
                 scene_to_patches[scene_id] = []
@@ -345,6 +344,7 @@ def get_fixed_random_patches(loader, n_per_scene: int = 2, seed: int = 42) -> di
 
 
 @torch.no_grad()
+
 def evaluate_and_log_uncertainty(
     model_rec: torch.nn.Module,
     model_unc: torch.nn.Module,
@@ -405,7 +405,7 @@ def evaluate_and_log_uncertainty(
     y_np = y_b.detach().cpu().numpy()
     x_init_np = x_init_b.detach().cpu().numpy()
     u_hat_np = u_hat.detach().cpu().numpy()
-
+    
     for idx_batch, p_id, scene_id in batch_indices_to_process:
       if p_id in found_patches[scene_id]:
         continue
@@ -422,7 +422,7 @@ def evaluate_and_log_uncertainty(
       sam_map = np.arccos(np.clip(dot / (norm_p * norm_g + 1e-8), -1.0, 1.0))
       sam_rad = float(np.mean(sam_map))
 
-      save_name = f"{prefix}_Scene_{scene_id}_Patch_{p_id}_SAM_{np.degrees(sam_rad):.2f}_deg.png"
+      save_name = f"{prefix}_Scene_{scene_id}_Patch_{p_id}"
 
       data_to_plot = {
           "cube_gt": gt_hwc,
@@ -444,8 +444,7 @@ def evaluate_and_log_uncertainty(
 
       found_patches[scene_id].add(p_id)
       found_count += 1
-
-  print("✅ Log des patchs fixes terminé en un éclair !")
+  print("log des patchs terminés")
 
 
 def main():
@@ -480,7 +479,6 @@ def main():
       kept_indices=kept_indices,
   )
 
-  # 🟢 Pré-sélection des patchs fixes par scène AVANT l'entraînement
   fixed_val_patches = get_fixed_random_patches(val_loader, n_per_scene=2, seed=42)
   fixed_test_patches = get_fixed_random_patches(test_loader, n_per_scene=2, seed=42)
 
@@ -498,13 +496,28 @@ def main():
   else:
     raise FileNotFoundError(f"❌ Checkpoint non trouvé : {rec_ckpt}")
 
+
   model_uncertainty = build_model_uncertainty(config['model_uncertainty'], n_msi, n_hsi).to(device)
+
+  loss_type = config["training"]["loss_type"]
   
-  criterion = L1_uncertainty()
+  if loss_type == "laplace_nll":
+    criterion = LaplaceNLLLossDirect()
+  else:
+    criterion = L1_uncertainty()
+
   optimizer = build_optimizer(config, model_uncertainty.parameters())
   scheduler = build_lr_scheduler(optimizer, config)
   run_name = build_run_name_uncertainty(config) + '_UNCERTAINTY' + (f'_{args.output_tag}' if args.output_tag else '')
-  run_name_wb = init_wandb(config, run_name=run_name)
+
+  
+  run = wandb.init(
+    project="Multimodal-change-detection", # Le nom de ton projet W&B
+    name=run_name,                          # Nom unique du run généré plus haut
+    config=config,                          # Sauvegarde les hyperparamètres
+    reinit=True
+)
+  run_name_wb = run.name
 
   best_val_loss = float('inf')
   early_stopper = EarlyStopping(patience=config['training'].get('patience', 15), start_epoch=10)
@@ -537,7 +550,6 @@ def main():
     early_stopper(val_metrics['val_loss_uncertainty'], epoch=epoch + 1)
     if early_stopper.early_stop: break
 
-  # Test final
   best_ckpt = get_project_root() / config['experiment']['output_dir'] / run_name_wb / 'best_model.pth'
   if best_ckpt.exists(): model_uncertainty.load_state_dict(torch.load(best_ckpt, map_location=device, weights_only=True))
   
@@ -555,8 +567,64 @@ def main():
       fixed_target_patches=fixed_test_patches,
       prefix="Test"
   )
-  wandb.finish()
 
+  # --- Vérification rapide de l'hypothèse de Laplace ---
+  # --- Vérification rapide de l'hypothèse de Laplace (Anti-OOM) ---
+  print("\n📊 Vérification empirique de la loi de Laplace sur le Test Set...")
+  all_errors = []
+  model_reconstruction.eval()
+
+  for x_init, x_interp, y, _ in test_loader:
+    with torch.no_grad():
+      y_pred = model_reconstruction(x_init.to(device), x_interp.to(device))
+      signed_errors = (y_pred - y.to(device)).detach().cpu().numpy().ravel()
+      
+      # 🛡️ Sous-échantillonnage direct par batch pour éviter l'explosion RAM
+      if len(signed_errors) > 10_000:
+        idx = np.random.choice(len(signed_errors), size=10_000, replace=False)
+        signed_errors = signed_errors[idx]
+        
+      all_errors.append(signed_errors.astype(np.float32))
+
+  # On fusionne un échantillon robuste mais contrôlé (max ~quelques centaines de milliers de points)
+  errors_flat = np.concatenate(all_errors)
+  if len(errors_flat) > 200_000:
+    idx = np.random.choice(len(errors_flat), size=200_000, replace=False)
+    errors_flat = errors_flat[idx]
+
+  loc, scale = laplace.fit(errors_flat)
+
+  print(f"✅ Ajustement Laplace terminé :")
+  print(f"   -> Position (loc / moyenne) : {loc:.5f}")
+  print(f"   -> Échelle (scale / b)      : {scale:.5f}")
+
+  wandb.log({"laplace_loc": loc, "laplace_scale": scale})
+  wandb.log({"errors_histogram": wandb.Histogram(errors_flat)})
+
+  fig, ax = plt.subplots(figsize=(8, 5))
+  ax.hist(
+      errors_flat,
+      bins=200,
+      density=True,
+      alpha=0.6,
+      color="skyblue",
+      label="Erreurs empiriques (échantillonnées)",
+  )
+
+  xmin, xmax = ax.get_xlim()
+  x = np.linspace(xmin, xmax, 1000)
+  p = laplace.pdf(x, loc, scale)
+  # Remplacement de "r-" par "r--" (ou "r:") et réduction du linewidth
+  ax.plot(x, p, linestyle="--", color="red", linewidth=1.0, label="Loi de Laplace théorique")
+
+  ax.set_title(f"Ajustement Loi de Laplace\nloc={loc:.5f}, scale={scale:.5f}")
+  ax.set_xlabel("Erreur signée (Prédiction - Vérité)")
+  ax.set_ylabel("Densité")
+  ax.legend()
+  ax.grid(True, alpha=0.3)
+  wandb.log({"laplace_fit_plot": wandb.Image(fig)})
+
+  wandb.finish()
 
 if __name__ == '__main__':
   main()

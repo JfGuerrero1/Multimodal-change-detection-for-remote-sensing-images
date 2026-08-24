@@ -21,8 +21,8 @@ from tqdm import tqdm
 
 
 from src.models import GradualExpansionUNet
-from src.metrics_and_loss.loss import SpectralLoss
-from src.metrics_and_loss.metrics import compute_ssim_multiband,compute_ergas
+from src.old.metrics_and_loss.loss import SpectralLoss
+from src.old.metrics_and_loss.metrics import compute_ssim_multiband,compute_ergas
 from src.prepare_data.prepare_patch import create_data_loaders_spectral
 from src.visualise.visualisation import visualise_synthesis
 from src.constants import WVL_PRS
@@ -47,7 +47,7 @@ def build_model(config: dict, n_msi: int, n_hsi: int) -> torch.nn.Module:
   model_cfg = config["model"]
   name = model_cfg.get("name", "").lower()
 
-  if name in ["gradualexpansionunet_res"]:
+  if name in ["gradualexpansionunet"]:
     model = GradualExpansionUNet(
         in_msi=n_msi,
         in_hsi=n_hsi,
@@ -454,7 +454,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="src/config/config_default_unet_res.yaml",
+        default="src/config/config_default_unet.yaml",
         help="Chemin vers le fichier de config YAML"
     )
     parser.add_argument(
