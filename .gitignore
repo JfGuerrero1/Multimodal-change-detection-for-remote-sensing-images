@@ -208,3 +208,5 @@ outputs/
 __pycache__/
 job_slurm/
 results/
+*.png
+tournois_plot/

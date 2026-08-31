@@ -16,7 +16,7 @@ from src.constants import WVL_PRS
 from src.models.dual_branch import DualBranchNAFNet
 from src.models.unet_residual import GradualExpansionUNet_residual
 from src.models.unet_standard import GradualExpansionUNet
-from src.old.metrics_and_loss.metrics import (
+from src.metrics_and_loss.metrics import (
     compute_ergas,
     compute_mae,
     compute_psnr,
@@ -303,6 +303,7 @@ def evaluate_pipeline_reconstruction(
     )
 
     # Courbe spectrale globale
+    """
     if n_pixels_total > 0:
         mean_error_glob = sum_error / n_pixels_total
         mean_sq_error_glob = sum_sq_error / n_pixels_total
@@ -320,17 +321,11 @@ def evaluate_pipeline_reconstruction(
         )
 
     # Plots ciblés
-    target_indices = set()
-    np.random.seed(42)
-    for _, group in df.groupby("scene"):
-        scene_patches = group["patch_id"].unique()
-        chosen = np.random.choice(
-            scene_patches, min(3, len(scene_patches)), replace=False
-        )
-        target_indices.update(chosen)
+    # Plots ciblés : modification pour traiter TOUS les patchs au lieu de 3 aléatoires
+    target_indices = df["patch_id"].unique()
 
     plot_sub_dir = output_dir / "targeted_patches"
-    for p_id in tqdm(target_indices, desc="Plots Ciblés"):
+    for p_id in tqdm(target_indices, desc="Plots Ciblés (Tous les patchs)"):
         if p_id not in cache_data:
             continue
         p_data = cache_data[p_id]
@@ -373,6 +368,7 @@ def evaluate_pipeline_reconstruction(
             output_dir_diag=plot_sub_dir,
             kept_indices=kept_indices,
         )
+    """
 
 
 def run_evaluation_spectral(config: dict, device: torch.device):

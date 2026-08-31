@@ -21,8 +21,8 @@ from tqdm import tqdm
 
 
 from src.models import GradualExpansionUNet
-from src.old.metrics_and_loss.loss import SpectralLoss
-from src.old.metrics_and_loss.metrics import compute_ssim_multiband,compute_ergas
+from src.metrics_and_loss.loss import SpectralLoss
+from src.metrics_and_loss.metrics import compute_ssim_multiband,compute_ergas
 from src.prepare_data.prepare_patch import create_data_loaders_spectral
 from src.visualise.visualisation import visualise_synthesis
 from src.constants import WVL_PRS

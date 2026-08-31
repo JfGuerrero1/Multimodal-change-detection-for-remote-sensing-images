@@ -4,7 +4,7 @@ import torch
 import torch.optim as optim
 
 from models import UNet, GradualExpansionUNet,GradualExpansionUNet_residual
-from src.old.metrics_and_loss.loss import SpectralLoss
+from src.metrics_and_loss.loss import SpectralLoss
 from old.utils_dataset import create_data_loaders_spectral, SpectralDataset
 from tqdm import tqdm
 import wandb

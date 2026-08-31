@@ -1,0 +1,65 @@
+experiment:
+  name: "spectral_gradual_expansion_run_all_wave_clean_mse"
+  seed: 42
+  project: "Multimodal-change-detection"
+  entity: "JfGuerrero"
+  output_dir: "checkpoints/filtered_clean_mse"
+
+model:
+  name: "gradualexpansionunet_res"
+  base_channel: 64
+  interpolation_mode: "Bilinear"
+  activation: "silu"
+  augment: true
+  with_batch_norm: true
+  with_mlp_spectral: false
+  final_activation: null
+  load_model: null                 # chemin vers un .pth si reprise d'entraînement, sinon null
+
+# Configuration du filtrage des longueurs d'onde
+wavelength_filtering:
+  enabled: true
+  # Liste des fenêtres atmosphériques (en nm) à retirer
+  excluded_windows:
+    - [1350, 1500]
+    - [1800, 2000]
+  excluded_bands: []
+
+data:
+  task: "spectral"
+  simulated: false
+  augment: true                    
+  augment_illumination: false       
+  is_normalised: false
+  mask: null                       
+  is_residual: true                # true pour gradualexpansionunet_res (x_init, x_interp, y)
+  batch_size: 8
+  num_workers: 4
+  data_dir_train: "data/patches_caches/train-clean"
+  data_dir_val: "data/patches_caches/val-clean"
+  data_dir_test: "data/patches_caches/test-clean"
+
+training:
+  epochs: 100
+  lr: 0.0002                       
+  loss_type: "spectral_loss"
+  lambda_sam: 0.5
+  lambda_mse: 1.0                  
+  lambda_mae: 0.0
+  scale_train_loss: 1.0            
+  optimizer_name: "adamw"          
+  weight_decay: 0.01               
+  
+  # Configuration du Scheduler
+  warm_up: true                    
+  warmup_epochs: 3                 
+  scheduler_type: "cosine_restarts" # Choix : "cosine_restarts", "cosine", "plateau"
+  
+  # Paramètres spécifiques (optionnels selon le type)
+  T_0: 50                          # Pour cosine_restarts
+  eta_min: 0.000001                # LR minimal
+  patience_plateau: 5              # Uniquement si scheduler_type: "plateau"
+
+  # Early Stopping
+  patience: 50                   
+  min_delta: 0.0001

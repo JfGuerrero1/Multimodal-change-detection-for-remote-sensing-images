@@ -16,7 +16,7 @@ import wandb
 import matplotlib.pyplot as plt
 
 from src.constants import WVL_PRS
-from src.old.metrics_and_loss.loss import L1_uncertainty,LaplaceNLLLossDirect
+from src.metrics_and_loss.loss import L1_uncertainty,LaplaceNLLLossDirect
 from src.models import (
     DualBranchNAFNet,
     DualBranchUNet,

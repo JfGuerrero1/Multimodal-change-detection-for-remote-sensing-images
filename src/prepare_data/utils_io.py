@@ -18,7 +18,6 @@ from joblib import Parallel, delayed
 import datetime
 import numpy as np
 from skimage.morphology import remove_small_objects
-from src.constants import SRF_MATRIX
 
 # --- Configuration des chemins ---
 CURRENT_FILE = Path(__file__).resolve()
@@ -736,15 +735,16 @@ if __name__ == "__main__":
     "tirana",
     "valencia",
     "yuen_long"]
-
-    for scene in L_scene:
-        
-        scene_path=f'/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/mumucd/{scene}/{scene}-after-prs.nc'
-        with  xr.open_dataset(scene_path) as ds:
-            patch=ds["sr"].values
-            patch=patch[:,:,:]
-            process_and_save_clouds(patch,scene+"_hsi",WVL_PRS)
     """
+        
+    scene_path=f'/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/mumucd/kitami/kitami-after-prs.nc'
+    with  xr.open_dataset(scene_path) as ds:
+        patch=ds["sr"].values
+        patch=patch[:,:,:]
+        trace_spectre(patch,[80,100,120],[400,400,400],"kigami",OUTPUT_DIR_DIAG)
+
+          
+    
 
     
 

@@ -2,7 +2,9 @@ import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 
-# Votre liste de longueurs d'onde PRISMA
+# ==========================================
+# CONSTANTES ET CONFIGURATION PRISMA
+# ==========================================
 WVL_PRS = np.array([
     406.9934, 415.839 , 423.78476, 431.3347 , 438.6569 , 446.0147 , 453.38947, 460.73175, 468.09842, 475.31885,
     482.54816, 489.79486, 497.05865, 504.51172, 512.0464 , 519.54376, 527.3053 , 535.05255, 542.88513, 550.9146 ,
@@ -32,50 +34,156 @@ WVL_PRS = np.array([
 def find_index(target_nm):
     return np.argmin(np.abs(WVL_PRS - target_nm))
 
-# Ciblage automatique des indices via les longueurs d'onde en nanomètres
-clean_targets = [489.79, 550.91, 664.89, 1606.49, 2214.62] # cwes propres
-atm_targets   = [1383.27, 1405.62, 1896.09, 1914.30, 1932.25] # cwes atmosphériques
+prisma_clean = [489.79, 550.91, 664.89, 1606.49, 2214.62] 
+prisma_atm   = [1383.27, 1416.53, 1896.09, 1914.30, 1941.11]  # Nouvelle bande atmosphérique intégrée
 
-good_indices = [find_index(t) for t in clean_targets]
-bad_indices  = [find_index(t) for t in atm_targets]
+good_indices = [find_index(t) for t in prisma_clean]
+bad_indices  = [find_index(t) for t in prisma_atm]
 
-def plot_normalized_prisma(nc_path, variable_name='sr'):
+def robust_scale(data):
+    valid = data[~np.isnan(data)]
+    if valid.size == 0:
+        return data
+    p2, p98 = np.percentile(valid, (2, 98))
+    if p98 == p2:
+        return data
+    return np.clip((data - p2) / (p98 - p2), 0, 1)
+
+# ==========================================
+# 1. TRAITEMENT PRISMA
+# ==========================================
+def process_prisma(nc_path, variable_name='sr'):
     ds = xr.open_dataset(nc_path)
     cube = ds[variable_name]
     
-    fig, axes = plt.subplots(2, 5, figsize=(16, 7))
-    fig.suptitle('PRISMA  : Comparaison avec normalisation par bande', fontsize=14)
+    fig, axes = plt.subplots(2, 6, figsize=(22, 8))
+    fig.suptitle('PRISMA : Vue RGB et Sélection de Bandes Spectrales', fontsize=14, fontweight='bold', y=0.96)
     
-    # Fonction de normalisation min-max pour forcer l'affichage du bruit résiduel
-    def min_max_scale(data):
-        d_min, d_max = np.nanmin(data), np.nanmax(data)
-        if d_max == d_min:
-            return data
-        return (data - d_min) / (d_max - d_min)
+    # RGB sur la première colonne (partagé sur les 2 lignes)
+    r_idx = find_index(664.89)
+    g_idx = find_index(550.91)
+    b_idx = find_index(489.79)
+    rgb_stack = np.dstack([
+        robust_scale(cube.isel(cw=r_idx).values),
+        robust_scale(cube.isel(cw=g_idx).values),
+        robust_scale(cube.isel(cw=b_idx).values)
+    ])
+    
+    for row in range(2):
+        axes[row, 0].imshow(rgb_stack)
+        axes[row, 0].set_title("Composition RGB\nNaturelle", fontsize=10, fontweight='bold', pad=6,
+                               bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.2'))
+        axes[row, 0].axis('off')
 
-    # Ligne du haut : cwes propres
+    # Ligne du haut : Bandes de surface
     for i, idx in enumerate(good_indices):
         wvl = WVL_PRS[idx]
         cw_data = cube.isel(cw=idx).values
-        norm_data = min_max_scale(cw_data)
+        axes[0, i+1].imshow(robust_scale(cw_data), cmap='gray')
+        axes[0, i+1].set_title(f"{wvl:.1f} nm", fontsize=10, fontweight='bold', pad=6,
+                               bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.2'))
+        axes[0, i+1].axis('off')
         
-        axes[0, i].imshow(norm_data, cmap='gray')
-        axes[0, i].set_title(f"{wvl:.1f} nm", fontsize=10)
-        axes[0, i].axis('off')
-        
-    # Ligne du bas : cwes atmosphériques
+    # Ligne du bas : Bandes atmosphériques
     for i, idx in enumerate(bad_indices):
         wvl = WVL_PRS[idx]
         cw_data = cube.isel(cw=idx).values
-        norm_data = min_max_scale(cw_data)
-        
-        axes[1, i].imshow(norm_data, cmap='gray')
-        axes[1, i].set_title(f"{wvl:.1f} nm", fontsize=10)
-        axes[1, i].axis('off')
+        axes[1, i+1].imshow(robust_scale(cw_data), cmap='gray')
+        axes[1, i+1].set_title(f"{wvl:.1f} nm", fontsize=10, fontweight='bold', pad=6,
+                               bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.2'))
+        axes[1, i+1].axis('off')
         
     plt.tight_layout()
-    plt.savefig('prisma_bruit_normalise.png', dpi=300)
-    plt.show()
+    plt.savefig('prisma_planche_globale.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
-# Utilisation :
-plot_normalized_prisma('/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/mumucd/brasilia/brasilia-after-prs.nc', variable_name='sr')
+    # 10 spectres aléatoires
+    shape = cube.shape
+    cw_axis = np.argmin(np.abs(np.array(shape) - 230))
+    spatial_axes = [i for i in range(3) if i != cw_axis]
+    h_dim, w_dim = shape[spatial_axes[0]], shape[spatial_axes[1]]
+    
+    np.random.seed(42)
+    rand_y = np.random.randint(0, h_dim, 10)
+    rand_x = np.random.randint(0, w_dim, 10)
+    
+    plt.figure(figsize=(10, 5))
+    for idx_p, (y, x) in enumerate(zip(rand_y, rand_x)):
+        if cw_axis == 2:
+            spectrum = cube.isel({cube.dims[spatial_axes[0]]: y, cube.dims[spatial_axes[1]]: x}).values
+        else:
+            spectrum = cube.values[:, y, x] if cw_axis == 0 else cube.values[y, x, :]
+            
+        if len(spectrum) != len(WVL_PRS):
+            spectrum = cube.values[y, x, :] if cw_axis == 2 else cube.values[:, y, x]
+
+        plt.plot(WVL_PRS, spectrum, alpha=0.7, lw=1.2, label=f'Pixel {idx_p+1}')
+
+    plt.title('Spectres PRISMA de 10 pixels aléatoires (400 - 2500 nm)', fontsize=12, fontweight='bold')
+    plt.xlabel('Longueur d\'onde (nm)', fontsize=10)
+    plt.ylabel('Réflectance de surface', fontsize=10)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend(loc='upper right', fontsize=8, ncol=2)
+    plt.tight_layout()
+    plt.savefig('prisma_10_spectres.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+# ==========================================
+# 2. TRAITEMENT SENTINEL-2 (Avec longueurs d'onde)
+# ==========================================
+def process_sentinel2(nc_path, variable_name='sr'):
+    ds = xr.open_dataset(nc_path)
+    cube = ds[variable_name]
+    
+    fig, axes = plt.subplots(1, 6, figsize=(22, 4.5))
+    fig.suptitle('Sentinel-2 : Vue RGB et Comparaison des Résolutions Spatiales', fontsize=14, fontweight='bold', y=0.98)
+    
+    try:
+        r_s2 = cube.isel(band=3).values
+        g_s2 = cube.isel(band=2).values
+        b_s2 = cube.isel(band=1).values
+    except:
+        r_s2 = cube.isel(cw=3).values
+        g_s2 = cube.isel(cw=2).values
+        b_s2 = cube.isel(cw=1).values
+        
+    rgb_s2 = np.dstack([robust_scale(r_s2), robust_scale(g_s2), robust_scale(b_s2)])
+    
+    axes[0].imshow(rgb_s2)
+    axes[0].set_title("RGB (10 m)\n(B4, B3, B2)", fontsize=10, fontweight='bold', pad=6,
+                      bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.2'))
+    axes[0].axis('off')
+
+    # Bandes Sentinel-2 avec leurs résolutions ET longueurs d'onde centrales approximatives
+    s2_bands = [
+        {"name": "B1 (Côtière)", "wvl": "443 nm", "res": "60 m", "idx": 0},
+        {"name": "B4 (Rouge)", "wvl": "665 nm", "res": "10 m", "idx": 3},
+        {"name": "B8 (NIR)", "wvl": "842 nm", "res": "10 m", "idx": 7},
+        {"name": "B11 (SWIR 1)", "wvl": "1610 nm", "res": "20 m", "idx": 8},
+        {"name": "B12 (SWIR 2)", "wvl": "2190 nm", "res": "20 m", "idx": 9}
+    ]
+    
+    for i, b in enumerate(s2_bands):
+        try:
+            band_data = cube.isel(band=b["idx"]).values
+        except:
+            band_data = cube.isel(cw=b["idx"]).values
+            
+        axes[i+1].imshow(robust_scale(band_data), cmap='gray')
+        axes[i+1].set_title(f"{b['name']} ({b['wvl']})\n{b['res']}", fontsize=10, fontweight='bold', pad=6,
+                            bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.2'))
+        axes[i+1].axis('off')
+        
+    plt.tight_layout()
+    plt.savefig('sentinel2_planche_globale.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+# ==========================================
+# EXÉCUTION GLOBALE
+# ==========================================
+prisma_nc_file = '/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/mumucd/brasilia/brasilia-after-prs.nc'
+s2_nc_file =     '/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/mumucd/brasilia/brasilia-after-s2.nc'
+
+process_prisma(prisma_nc_file, variable_name='sr')
+process_sentinel2(s2_nc_file, variable_name='sr')
+print("Exécution terminée avec succès !")

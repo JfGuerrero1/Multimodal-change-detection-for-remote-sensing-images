@@ -27,7 +27,7 @@ import wandb
 # Sécurité pour les serveurs sans GUI
 matplotlib.use('Agg')
 from src.constants import WVL_PRS, DW_INFO,WVL_S2
-from src.old.metrics_and_loss.metrics import compute_sam_map,compute_mae,compute_ergas,compute_mrae,compute_ssim_multiband,compute_mse,compute_sam,compute_psnr,compute_rmse    
+from src.metrics_and_loss.metrics import compute_sam_map,compute_mae,compute_ergas,compute_mrae,compute_ssim_multiband,compute_mse,compute_sam,compute_psnr,compute_rmse    
 CHANNELS_ATM = [80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 200, 220]
 CHANNELS_STD = [5, 11, 20, 32, 36, 40, 44, 50, 52, 59, 122, 187]
 CHANNELS_ONLY_ATM = [98, 101, 104, 107, 110, 113, 116, 119, 122, 125]

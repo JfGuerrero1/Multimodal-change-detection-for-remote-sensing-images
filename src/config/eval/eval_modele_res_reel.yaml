@@ -3,9 +3,9 @@
 # ==========================================
 evaluation:
   output_dir: "results/evaluation_report_real_unet_residual"
-  model_name: "GradualExpansionUNet"
-  weights_path: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/filtered_clean/gradualexpansionunet_res_real_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual/best_model.pth"
-
+  model_name: "gradualexpansionunet_res"
+  weights_path_reconstruction: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/filtered_clean/gradualexpansionunet_res_real_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual/best_model.pth"
+  weight_path_uncertaintyy: ""
 # Configuration de l'architecture du modèle
 model:
   name: "gradualexpansionunet_res"

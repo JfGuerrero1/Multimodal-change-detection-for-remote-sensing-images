@@ -209,15 +209,6 @@ class SpectralDataset(Dataset):
 
       return x, x_interp, y, patch_id
 
-      # Color Jittering appliqué SEULEMENT sur x et x_interp (y reste intact)
-      if self.is_color_augmented:
-        x, x_interp = self.augment_color_jittering(x, x_interp)
-
-      # Augmentation géométrique appliquée sur tout le triplet (x, x_interp, y)
-      if self.augment:
-        x, x_interp, y = self.augment_geometric(x, x_interp, y)
-
-      return x, x_interp, y, patch_id
 
     #  CAS 2 : Modèle Standard (MSI, HSI_gt)
     else:

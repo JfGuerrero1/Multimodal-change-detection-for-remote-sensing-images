@@ -7,7 +7,7 @@ evaluation:
   
   # Chemins vers les poids des modèles
   weights_path_reconstruction: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/filtered_clean_normalised/gradualexpansionunet_res_real_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual_filtered_clean_normalised/best_model.pth"
-  weights_path_uncertainty: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/uncertainty_dualbranchnafnet_run_nll/dualbranchnafnet_ch64_l1_loss_lr-0.0003_UNCERTAINTY/best_model.pth"
+  weights_path_uncertainty: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/uncertainty_dualbranchnafnet_run_normalised/dualbranchnafnet_ch64_laplace_nll_lr-0.0003_UNCERTAINTY/best_model.pth"
   use_amp: true
   log_to_wandb: false
 

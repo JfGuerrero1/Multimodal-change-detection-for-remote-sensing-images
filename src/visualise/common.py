@@ -16,7 +16,7 @@ torch.cuda.set_device(0)
 from constants import DEFAULT_SRF_PATH,INTERP_MATRIX,SRF_MATRIX
 
 
-from src.old.metrics_and_loss.metrics import compute_sam_map,compute_mae,compute_ergas,compute_mrae,compute_ssim_multiband,compute_mse,compute_sam,compute_psnr,compute_rmse    
+from src.metrics_and_loss.metrics import compute_sam_map,compute_mae,compute_ergas,compute_mrae,compute_ssim_multiband,compute_mse,compute_sam,compute_psnr,compute_rmse    
 
 import gc
 import os
@@ -31,7 +31,7 @@ import numpy as np
 import scipy.interpolate
 from scipy.stats import spearmanr
 from skimage.metrics import structural_similarity as ssim_sk
-from src.old.metrics_and_loss.metrics import (
+from src.metrics_and_loss.metrics import (
     compute_ergas,
     compute_mae,
     compute_mrae,
