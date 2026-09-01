@@ -210,3 +210,4 @@ job_slurm/
 results/
 *.png
 tournois_plot/
+*.csv
