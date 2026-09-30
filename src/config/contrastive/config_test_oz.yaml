@@ -1,0 +1,82 @@
+# ============================================================================
+# CONFIGURATION D'ENTRAÎNEMENT - MEAN TEACHER PIXEL-WISE HSI
+# ============================================================================
+
+experiment:
+  name: "spectral_contrastive_meanteacher"
+  seed: 42
+  project: "Multimodal-change-detection"
+  entity: "JfGuerrero"
+  output_dir: "checkpoints/contrastive_meanteacher_hsi_pixel_pixel2"
+
+model:
+  name: "siamese_heterogene"             # Nom reconnu par la fonction build_model pour instancier MeanTeacher
+  base_channels: 32               # Nombre de canaux de base du ResNet
+  latent_dim: 32                  # Dimension de l'espace latent spatial (B, C, H, W)
+  load_model: null                # Chemin vers un .pth si reprise d'entraînement, sinon null
+
+# Configuration du filtrage des longueurs d'onde
+wavelength_filtering:
+  enabled: true
+  excluded_windows:
+    - [1350, 1500]
+    - [1800, 2000]
+  excluded_bands: []
+
+data:
+  augmentation: true
+  batch_size: 16
+  num_workers: 4
+  val_split: 0.2
+  data_dir_train: "data/patches_caches/train-contrastive1/train-clean"
+  data_dir_val: "data/patches_caches/val-contrastive1/val-clean"
+  data_dir_test: "data/patches_caches/test-contrastive1/test-clean"
+  task: "contrastive"
+  
+  # === AJOUTS RECOMMANDÉS POUR LE CONTRASTIF TWO-ZONE ===
+  two_zone: true        # Mettez à true si vous voulez comparer 2 zones de la même image
+  patch_size: 64         # Taille des sous-patchs extraits (ex: 64x64)
+  
+
+  # PARAMÈTRES DE SEUILLAGE DU DATASET (Théorique ou Empirique)
+  # ========================================================================
+  threshold_mode: "empirical"      # "theoretical" ou "empirical"
+  tau_low_pct: 50.0                   # Pourcentage pour tau_low
+  tau_high_pct: 98.0                  # Pourcentage pour tau_high
+  gamma_low_pct: 50.0                 # Pourcentage pour gamma_low
+  sample_size_for_percentiles: 500    # Nombre de patches échantillonnés si mode empirique
+
+training:
+  epochs: 40
+  lr: 0.00001                       
+  
+  # Optimiseur
+  optimizer: "adamw"               # Clé standard lue par build_optimizer
+  optimizer_name: "adamw"          # Compatibilité avec vos utilitaires existants
+  weight_decay: 0.01               
+  
+  # Configuration du Scheduler
+  warm_up: true                    
+  warmup_epochs: 3                 
+  scheduler: "cosine"              # Clé standard lue par build_lr_scheduler
+  scheduler_type: "cosine_restarts" 
+  scheduler_params:
+    T_max: 100
+    eta_min: 0.000001
+  T_0: 50                          
+  eta_min: 0.000001                
+
+  # ========================================================================
+  # PARAMÈTRES SPÉCIFIQUES CONTRASTIF & MEAN TEACHER
+  # ========================================================================
+  temperature: 0.07               # Température pour la loss InfoNCE pixel-wise
+  ema_alpha: 0.99                 # Paramètre de lissage EMA pour mettre à jour le Teacher
+  similarity_log_interval: 10     # Fréquence de log des cartes pixel-wise sur WandB (en epochs)
+  use_amp: true                   # Précision mixte sur GPU
+
+  # Early Stopping
+  early_stopping_patience: 30      
+  early_stopping_min_delta: 0.00001 
+  early_stopping_start_epoch: 10
+  patience: 60                    
+  min_delta: 0.00001

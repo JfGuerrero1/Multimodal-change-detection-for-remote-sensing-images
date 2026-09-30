@@ -282,7 +282,6 @@ def test(
 
 
 @torch.no_grad()
-@torch.no_grad()
 def evaluate_and_log_random_patches(
     model: torch.nn.Module,
     loader: torch.utils.data.DataLoader,
@@ -310,7 +309,7 @@ def evaluate_and_log_random_patches(
 
   scenes_dict = {}
 
-  print(f"\n🔍 [1/2] Évaluation du jeu de données ({prefix}) et stockage des prédictions...")
+  print(f"\n [1/2] Évaluation du jeu de données ({prefix}) et stockage des prédictions...")
 
   for x_init, x_interp, y, patch_ids in tqdm(loader, desc=f"Inférence {prefix}"):
     x_init = x_init.to(device, non_blocking=True)
@@ -365,7 +364,7 @@ def evaluate_and_log_random_patches(
         scenes_dict[scene_id] = []
       scenes_dict[scene_id].append(patch_data)
 
-  print(f"\n🎲 [2/2] Sélection déterministe et envoi des planches ({prefix}) sur WandB...")
+  print(f"\n [2/2] Sélection déterministe et envoi des planches ({prefix}) sur WandB...")
 
   # Tri des scènes pour un parcours toujours identique
   for scene_id in sorted(scenes_dict.keys(), key=lambda x: str(x)):
@@ -490,7 +489,7 @@ def main():
       train_dir=config["data"]["data_dir_train"],
       val_dir=config["data"]["data_dir_val"],
       test_dir=config["data"]["data_dir_test"],
-      simulated=config["data"]["simulated"],
+      proportion_simulated=config["data"]["proportion_simulated"],
       augment=config["data"]["augment"], 
       augment_illumination=config["data"]["augment_illumination"],
       batch_size=config["data"]["batch_size"],
@@ -587,9 +586,9 @@ def main():
         artifact = wandb.Artifact(name=run_name_wb, type="model")
         artifact.add_file(str(checkpoint_path))
         wandb.log_artifact(artifact)
-        print(f"   💾 Nouveau meilleur modèle sauvegardé !")
+        print(f"    Nouveau meilleur modèle sauvegardé !")
 
-        print(f"   📊 Génération des patchs aléatoires (Val Epoch {epoch+1})...")
+        print(f"    Génération des patchs aléatoires (Val Epoch {epoch+1})...")
         # CORRECTION ICI (nom corrigé) :
         evaluate_and_log_random_patches(
             model=model,
@@ -605,7 +604,7 @@ def main():
       early_stopper(val_loss, epoch=epoch + 1)
 
       if early_stopper.early_stop:
-          print(f"\n⏹️ Arrêt précoce déclenché à l'époque {epoch+1} !")
+          print(f"\n⏹ Arrêt précoce déclenché à l'époque {epoch+1} !")
           break
 
   print(f"\n{'='*60}")
@@ -628,7 +627,7 @@ def main():
 
   test_metrics = test(model, test_loader, criterion, device, use_amp=use_amp)
 
-  print(f"\n📊 Résultats Test Globaux : MAE={test_metrics['mae']:.6f} | MSE={test_metrics['mse']:.6f} | SAM={test_metrics['sam']:.4f} rad ({np.degrees(test_metrics['sam']):.2f}°) | PSNR={test_metrics['psnr']:.2f} dB | SSIM={test_metrics['ssim']:.4f} | ERGAS={test_metrics['ergas']:.2f}")
+  print(f"\n Résultats Test Globaux : MAE={test_metrics['mae']:.6f} | MSE={test_metrics['mse']:.6f} | SAM={test_metrics['sam']:.4f} rad ({np.degrees(test_metrics['sam']):.2f}°) | PSNR={test_metrics['psnr']:.2f} dB | SSIM={test_metrics['ssim']:.4f} | ERGAS={test_metrics['ergas']:.2f}")
 
   wandb.log({
       "test/loss": test_metrics["loss"],
@@ -654,7 +653,7 @@ def main():
   )
 
   print(f"\n{'='*60}")
-  print("🚀 ENTRAÎNEMENT ET ÉVALUATION TERMINÉS AVEC SUCCÈS")
+  print(" ENTRAÎNEMENT ET ÉVALUATION TERMINÉS AVEC SUCCÈS")
   print(f"{'='*60}\n")
 
   wandb.finish()

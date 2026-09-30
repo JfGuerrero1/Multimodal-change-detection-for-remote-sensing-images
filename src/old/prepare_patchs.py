@@ -139,12 +139,12 @@ def prepare_dataset_offline(scene_pairs, split_name, patch_size=256, use_simulat
 
 
                 
-def create_data_loaders_spectral( use_simulated_msi, augment, batch_size=8,  num_workers=4, is_residual=False,keep_atm_wave=True,is_normalised=False):
+def create_data_loaders_spectral( simulated, augment, batch_size=8,  num_workers=4, is_residual=False,keep_atm_wave=True,is_normalised=False):
     
 
     print(f" Chargement direct des patches pré-calculés depuis : {CACHE_DIR.resolve()}")
     
-    mode_suffix = "simulated" if use_simulated_msi else "real"
+    mode_suffix = "simulated" if simulated else "real"
     
     # Chemins directs vers tes dossiers déjà splittés
     train_dir = CACHE_DIR / mode_suffix / 'train'
@@ -205,4 +205,3 @@ if __name__ == "__main__":
         use_simulated_msi=USE_SIMULATED_MSI
     )
 
-if __name__ == "__main__":

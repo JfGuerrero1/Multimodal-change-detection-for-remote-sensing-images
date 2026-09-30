@@ -18,6 +18,7 @@ from joblib import Parallel, delayed
 import datetime
 import numpy as np
 from skimage.morphology import remove_small_objects
+from src.constants import SRF_MATRIX
 
 # --- Configuration des chemins ---
 CURRENT_FILE = Path(__file__).resolve()
@@ -358,7 +359,7 @@ def stat_dico(patch_hsi, patch_msi, patch_dw, patch_name, date_df,
     gradient_spectral_high = rupture_metrics['max_grad_spectral_high'] > 100
     is_inconsistent_sim = msi_simulation_rmse > sim_rmse_threshold
     
-    is_aberrant = (gradient_spatial_high or is_cloudy or gradient_spectral_high or is_inconsistent_sim)
+    is_aberrant = (gradient_spatial_high or is_cloudy or gradient_spectral_high )
 
     diagnostics = {
         "is_cloudy": is_cloudy,
@@ -741,7 +742,7 @@ if __name__ == "__main__":
     with  xr.open_dataset(scene_path) as ds:
         patch=ds["sr"].values
         patch=patch[:,:,:]
-        trace_spectre(patch,[80,100,120],[400,400,400],"kigami",OUTPUT_DIR_DIAG)
+        trace_spectre(patch,[80,100,120],[400,400,400],"kigami",OUTPUT_DIR_DIAG,wvl_prs=WVL_PRS)
 
           
     

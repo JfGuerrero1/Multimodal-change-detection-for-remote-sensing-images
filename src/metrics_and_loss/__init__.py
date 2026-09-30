@@ -10,3 +10,5 @@ from .metrics import (
     compute_sam
 
 )
+
+from .loss import (SpectralLoss,LaplaceNLLLossDirect,L1_uncertainty, InfoNce,PixelWiseInfoNCE)

@@ -293,7 +293,7 @@ def build_lr_scheduler(optimizer: torch.optim.Optimizer, config: dict):
 def build_run_name(config: dict) -> str:
     """Construit le nom du run depuis la config."""
     model_name = config["model"]["name"]
-    data_mode = "sim" if config["data"]["simulated"] else "real"
+    p_sim = f"sim_{config['data']['proportion_simulated']}"
     aug_mode = "aug" if config["data"]["augment"] else "noaug"
     mlp_mode = "mlp" if config["model"]["with_mlp_spectral"] else "no_mlp"
     
@@ -304,7 +304,7 @@ def build_run_name(config: dict) -> str:
     )
     
     run_name = (
-        f"{model_name}_{data_mode}_{aug_mode}_"
+        f"{model_name}_{p_sim}_sim_{aug_mode}_"
         f"{loss_components}_lr-{config['training']['lr']}_{mlp_mode}_residual"
     )
     return run_name

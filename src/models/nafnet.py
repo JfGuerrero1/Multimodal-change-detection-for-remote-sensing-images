@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from .commons_model import NAFBlock
 
 class NAFNet(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3, width=16, middle_blk_num=1, enc_blk_nums=[], dec_blk_nums=[], drop_out_rate=0., **usl_kwargs):
+    def __init__(self, in_channels=3, out_channels=3, width=16, middle_blk_num=1, enc_blk_nums=[], dec_blk_nums=[], drop_out_rate=0., final_activation=None, **usl_kwargs):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -14,6 +14,10 @@ class NAFNet(nn.Module):
         self.enc_blk_nums = enc_blk_nums
         self.dec_blk_nums = dec_blk_nums
         self.drop_out_rate = drop_out_rate
+        self.final_activation = final_activation
+        if self.final_activation is None:
+            self.final_activation = nn.Identity()
+        
 
         self.intro = nn.Conv2d(in_channels=in_channels, out_channels=width, kernel_size=3, padding=1, stride=1, groups=1, bias=True)
         self.ending = nn.Conv2d(in_channels=width, out_channels=out_channels, kernel_size=3, padding=1, stride=1, groups=1, bias=True)
@@ -63,7 +67,7 @@ class NAFNet(nn.Module):
         x = self.ending(x)
         x = x[:, :, :H, :W]
         
-        return F.softplus(x)
+        return self.final_activation(x)
 
     def check_image_size(self, x):
         _, _, h, w = x.size()

@@ -8,6 +8,7 @@ evaluation:
   # Chemins vers les poids des modèles
   weights_path_reconstruction: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/filtered_clean_normalised/gradualexpansionunet_res_real_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual_filtered_clean_normalised/best_model.pth"
   weights_path_uncertainty: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/uncertainty_dualbranchnafnet_run_normalised/dualbranchnafnet_ch64_laplace_nll_lr-0.0003_UNCERTAINTY/best_model.pth"
+  weights_path_contrastive: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/contrastive_siamese_msi_hsi3/siamese_heterogene_lr5e-05_20260918_190158_a100_run/best_model.pth"
   use_amp: true
   log_to_wandb: false
 
@@ -20,6 +21,13 @@ model:
   with_batch_norm: true
   with_mlp_spectral: false
   final_activation: null
+
+#modele contrastive
+model_contrastive:
+  name: "siamese_heterogene"
+  base_channels: 32               # Note : 'base_channels' (pluriel) attendu par le script
+  latent_dim: 64                  # Dimension de l'espace latent partagé
+  load_model: null   
 
 # Configuration du modèle d'incertitude (utilisé uniquement en mode uncertainty)
 model_uncertainty:
@@ -47,9 +55,9 @@ data:
   
   # Chemins des jeux de données
   
-  data_dir_train: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/patches_caches/train-clean"
-  data_dir_val: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/patches_caches/val-clean"
-  data_dir_test: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/patches_caches/test-clean"
+  data_dir_train: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/patches_caches/train_contrastive1/train-clean"
+  data_dir_val: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/patches_caches/val_contrastive1/val-clean"
+  data_dir_test: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/patches_caches/test_contrastive1/test-clean"
 wavelength_filtering:
   enabled: true
   # Liste des fenêtres atmosphériques (en nm) à retirer

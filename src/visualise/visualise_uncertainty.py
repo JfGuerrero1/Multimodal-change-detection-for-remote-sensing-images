@@ -335,26 +335,24 @@ def compute_dynamic_nfa_threshold(map_data, nfa_target=0.01):
   return np.percentile(valid_values, percentile)
 
 
-def create_confusion_rgb(pred_map, gt_map):
-  """Génère une carte RGB pour la confusion :
-  - Vert : Vrais Positifs (TP)
-  - Rouge : Faux Positifs (FP)
-  - Bleu : Faux Négatifs (FN)
-  - Noir : Vrais Négatifs (TN)
-  """
-  h, w = gt_map.shape
-  rgb = np.zeros((h, w, 3), dtype=np.float32)
-
-  tp = (pred_map == 1) & (gt_map == 1)
-  fp = (pred_map == 1) & (gt_map == 0)
-  fn = (pred_map == 0) & (gt_map == 1)
-
-  rgb[tp] = [0, 1, 0]
-  rgb[fp] = [1, 0, 0]
-  rgb[fn] = [0, 0.4, 1]
-
-  return rgb
-
+def create_custom_confusion_rgb(pred_map, gt_map):
+    # Sécurité au cas où les tableaux ne seraient pas explicitement booléens
+    pred_map = pred_map.astype(bool)
+    gt_map = gt_map.astype(bool)
+    
+    h, w = pred_map.shape
+    rgb_conf = np.zeros((h, w, 3), dtype=np.float32)
+    
+    tp = pred_map & gt_map
+    fp = pred_map & np.logical_not(gt_map)
+    fn = np.logical_not(pred_map) & gt_map
+    
+    rgb_conf[tp] = [1.0, 1.0, 1.0]  # Blanc : TP
+    rgb_conf[fp] = [0.0, 1.0, 0.0]  # Vert : FP
+    rgb_conf[fn] = [1.0, 0.0, 1.0]  # Magenta : FN
+    # TN reste Noir [0, 0, 0]
+    
+    return rgb_conf
 
 def visualise_changement_complet_nfa(
     data_t1,
@@ -413,14 +411,13 @@ def visualise_changement_complet_nfa(
 
     tau_brut = compute_dynamic_nfa_threshold(E_t1, nfa_target=nfa_target)
     tau_unc = compute_dynamic_nfa_threshold(D_t1, nfa_target=nfa_target)
+  else:
+    tau_brut = np.percentile(E, 95)
+    tau_unc = np.percentile(D, 95)
 
   change_map_raw = E > tau_brut
   change_map_unc = D > tau_unc
-  false_positives_filtered = change_map_raw.astype(int) - change_map_unc.astype(
-      int
-  )
 
-  # --- Calcul des pourcentages ---
   total_px = change_map_raw.size
   pct_raw = (np.sum(change_map_raw) / total_px) * 100.0
   pct_unc = (np.sum(change_map_unc) / total_px) * 100.0
@@ -457,9 +454,26 @@ def visualise_changement_complet_nfa(
   rgb_y2_pred = to_rgb(cube_y2_pred, idx_r_hsi, idx_v_hsi, idx_b_hsi)
   rgb_msi_t2 = to_rgb(cube_msi_t2, idx_r_msi, idx_v_msi, idx_b_msi)
 
-  fig, axes = plt.subplots(4, 3, figsize=(16, 17))
+  def create_custom_confusion_rgb(pred_map, gt_map):
+    pred_map = pred_map.astype(bool)
+    gt_map = gt_map.astype(bool)
+    
+    h, w = pred_map.shape
+    rgb_conf = np.zeros((h, w, 3), dtype=np.float32)
+    
+    tp = pred_map & gt_map
+    fp = pred_map & np.logical_not(gt_map)
+    fn = np.logical_not(pred_map) & gt_map
+    
+    rgb_conf[tp] = [1.0, 1.0, 1.0]  # Blanc : TP
+    rgb_conf[fp] = [0.0, 1.0, 0.0]  # Vert : FP
+    rgb_conf[fn] = [1.0, 0.0, 1.0]  # Magenta : FN
+    # TN reste Noir [0, 0, 0]
+    
+    return rgb_conf
 
-  # --- Intégration des pourcentages dans le titre global ---
+  fig, axes = plt.subplots(3, 3, figsize=(16, 13))
+
   fig.suptitle(
       f"Détection de changement Y1 vs Ŷ2 ({model_name})\n"
       f"Métrique globale (Y1 - Ŷ2) -> MAE : {mae_global:.4f} | SAM :"
@@ -470,6 +484,7 @@ def visualise_changement_complet_nfa(
       fontweight="bold",
   )
 
+  # Ligne 0 : Images RGB
   axes[0, 0].imshow(rgb_y1)
   axes[0, 0].set_title("1. HSI Y1 (T1 Réel)")
   axes[0, 1].imshow(rgb_msi_t2)
@@ -477,67 +492,68 @@ def visualise_changement_complet_nfa(
   axes[0, 2].imshow(rgb_y2_pred)
   axes[0, 2].set_title("3. HSI Ŷ2 (T2 Prédit)")
 
-  vmax_b = np.percentile(b_amp[np.isfinite(b_amp)], 98)
-  vmax_e = np.percentile(E[np.isfinite(E)], 98)
-  vmax_d = np.percentile(D[np.isfinite(D)], 98)
+  # Dynamique percentilée 2-98 pour b, E, D
+  v_min_b, vmax_b = np.percentile(b_amp, [2, 98])
+  v_min_e, vmax_e = np.percentile(E, [2, 98])
+  v_min_d, vmax_d = np.percentile(D, [2, 98])
 
-  im1 = axes[1, 0].imshow(b_amp, cmap="magma", vmax=vmax_b)
+  # Ligne 1 : Incertitude et Erreurs
+  im1 = axes[1, 0].imshow(b_amp, cmap="magma", vmin=v_min_b, vmax=vmax_b)
   axes[1, 0].set_title("4. Incertitude b (T2)")
   plt.colorbar(im1, ax=axes[1, 0])
 
-  im2 = axes[1, 1].imshow(E, cmap="magma", vmax=vmax_e)
+  im2 = axes[1, 1].imshow(E, cmap="magma", vmin=v_min_e, vmax=vmax_e)
   axes[1, 1].set_title(f"5. Changement brut E ({metric_type.upper()})")
   plt.colorbar(im2, ax=axes[1, 1])
 
-  im3 = axes[1, 2].imshow(D, cmap="magma", vmax=vmax_d)
+  im3 = axes[1, 2].imshow(D, cmap="magma", vmin=v_min_d, vmax=vmax_d)
   axes[1, 2].set_title("6. Changement normalisé D (E / b)")
   plt.colorbar(im3, ax=axes[1, 2])
 
-  axes[2, 0].imshow(change_map_raw, cmap="gray")
-  axes[2, 0].set_title(f"7. Brut : E > {tau_brut:.3f}")
-
-  axes[2, 1].imshow(change_map_unc, cmap="gray")
-  axes[2, 1].set_title(f"8. Filtré : D > {tau_unc:.3f}")
-
-  im4 = axes[2, 2].imshow(false_positives_filtered, cmap="coolwarm")
-  axes[2, 2].set_title(
-      "9. Impact de l'Incertitude (Brut - Filtré)\nRouge: Erreur éliminée |"
-      " Bleu: Changement révélé"
-  )
-
+  # Ligne 2 : Cartes de changements / Comparaison GT
   if gt_change_map is not None:
     f1_raw, prec_raw, rec_raw = compute_f1_score(change_map_raw, gt_change_map)
     f1_unc, prec_unc, rec_unc = compute_f1_score(change_map_unc, gt_change_map)
 
-    axes[3, 0].imshow(gt_change_map, cmap="gray")
-    axes[3, 0].set_title("10. Carte GT (scene-cd-binary.nc)")
-
-    rgb_raw_conf = create_confusion_rgb(change_map_raw, gt_change_map)
-    axes[3, 1].imshow(rgb_raw_conf)
-    axes[3, 1].set_title(
-        f"11. Performance Brut (E)\nF1: {f1_raw:.4f} | Prec: {prec_raw:.3f} |"
-        f" Rec: {rec_raw:.3f}\nVert: TP | Rouge: FP | Bleu: FN | Noir: TN"
+    rgb_raw_conf = create_custom_confusion_rgb(change_map_raw, gt_change_map)
+    axes[2, 0].imshow(rgb_raw_conf)
+    axes[2, 0].set_title(
+        f"7. Perf. Brut (E)\nF1: {f1_raw:.4f} | Prec: {prec_raw:.3f} | Rec: {rec_raw:.3f}\n"
+        "Blanc: TP | Vert: FP | Magenta: FN | Noir: TN"
     )
 
-    rgb_unc_conf = create_confusion_rgb(change_map_unc, gt_change_map)
-    axes[3, 2].imshow(rgb_unc_conf)
-    axes[3, 2].set_title(
-        f"12. Performance Filtré (D)\nF1: {f1_unc:.4f} | Prec: {prec_unc:.3f} |"
-        f" Rec: {rec_unc:.3f}\nVert: TP | Rouge: FP | Bleu: FN | Noir: TN"
+    rgb_unc_conf = create_custom_confusion_rgb(change_map_unc, gt_change_map)
+    axes[2, 1].imshow(rgb_unc_conf)
+    axes[2, 1].set_title(
+        f"8. Perf. Filtré (D)\nF1: {f1_unc:.4f} | Prec: {prec_unc:.3f} | Rec: {rec_unc:.3f}\n"
+        "Blanc: TP | Vert: FP | Magenta: FN | Noir: TN"
     )
+
+    axes[2, 2].imshow(gt_change_map, cmap="gray")
+    axes[2, 2].set_title("9. Carte GT (Vérité Terrain)")
   else:
-    for j in range(3):
-      axes[3, j].text(
-          0.5,
-          0.5,
-          "GT non disponible",
-          ha="center",
-          va="center",
-          fontsize=12,
-      )
+    axes[2, 0].imshow(change_map_raw, cmap="gray")
+    axes[2, 0].set_title(f"7. Brut : E > {tau_brut:.3f}")
 
-  for ax in axes.ravel():
-    ax.axis("off")
+    axes[2, 1].imshow(change_map_unc, cmap="gray")
+    axes[2, 1].set_title(f"8. Filtré : D > {tau_unc:.3f}")
+
+    for j in range(2):
+      axes[2, j].axis("off")
+    axes[2, 2].text(
+        0.5,
+        0.5,
+        "GT non disponible",
+        ha="center",
+        va="center",
+        fontsize=12,
+    )
+    axes[2, 2].axis("off")
+
+  for i in range(3):
+    for j in range(3):
+      axes[i, j].set_xticks([])
+      axes[i, j].set_yticks([])
 
   plt.tight_layout()
 

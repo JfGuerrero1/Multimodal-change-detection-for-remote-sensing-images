@@ -1,0 +1,99 @@
+# =====================================================================
+# Configuration - Détection de Changement (Reconstruction & Incertitude)
+# =====================================================================
+# =====================================================================
+# Configuration - Détection de Changement MSI/HSI (MuMuCD)
+# =====================================================================
+
+data:
+  dataset_name: "mumucd"
+  data_dir: "data/mumucd"
+  n_msi: 12
+  n_hsi: 195
+  patch_size: 256
+  scenes:
+    - aranjuez
+    - arborea
+    - athens
+    - baltijsk
+    - bari
+    - beer_sheva
+    - beheira
+    - beirut
+    - belgrade
+    - binh_dai
+    - brasilia
+    - camerino
+    - cape_town
+    - codigoro
+    - copenhagen
+    - copperton
+    - cukotka
+    - cullivel
+    - dellys
+    - dubai
+    - elsalto
+    - eyjafjoll
+    - fontainebleau
+    - fukushima
+    - guantanamo
+    - hanging_rock
+    - istanbul
+    - jagersfontein
+    - java
+    - jordan
+    - kirtland
+    - kitami
+    - lagos
+    - lorca
+    - los_angeles
+    - los_cabos
+    - malindi
+    - mantua
+    - mexico_city
+    - montevideo
+    - mosul
+    - mrirt
+    - muscat
+    - nagaoka
+    - new_york
+    - nicosia
+    - nouakchott
+    - novara
+    - palermo
+    - paris
+    - poinciana
+    - port_au_prince
+    - prague
+    - quito
+    - rome
+    - salinas
+    - sanaa
+    - shanghai
+    - spinazzola
+    - suez
+    - sydney
+    - taiwan
+    - tampa_bay
+    - tientsin
+    - tijuana
+    - tirana
+    - valencia
+    - yuen_long
+
+model:
+  base_channel: 64
+
+model_uncertainty:
+  base_channel: 64
+
+model_siamese:
+  base_channels: 32
+  latent_dim: 32
+
+
+evaluation:
+  # Chemins vers les fichiers de poids des différents modèles nécessaires
+  weights_path_reconstruction: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/filtered_clean_normalised2/gradualexpansionunet_res_real_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual_filtered_clean_normalised/best_model.pth"
+  weights_path_uncertainty: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/uncertainty_dualbranchnafnet_run_normalised/dualbranchnafnet_ch64_laplace_nll_lr-0.0003_UNCERTAINTY/best_model.pth"
+  weights_path_siamese: "/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/checkpoints/contrastive_siamese_msi_hsi_64*64/siamese_heterogene_pure_lr1e-05_20260927_130132/best_model.pth"

@@ -1,0 +1,286 @@
+# ============================================================================
+# CONFIGURATION POUR INFÉRENCE DE DÉTECTION DE CHANGEMENT
+# ============================================================================
+# Basée sur les vrais checkpoints et paramètres d'entraînement
+
+# ============================================================================
+# DONNÉES
+# ============================================================================
+data:
+  # Dimensions
+  n_msi: 12                  # Sentinel-2 (11 bandes + 1)
+  n_hsi: 195                 # Prisma (filtré)
+  patch_size: 256            # Taille des patchs pour inférence
+  
+  # Normalisation et traitement
+  is_normalised: true        # Les données d'entraînement étaient normalisées
+  is_residual: true          # Les modèles utilisent des connexions résiduelles
+  
+  # Filtrage des bandes atmosphériques
+  wavelength_filtering:
+    enabled: true
+    excluded_windows:
+      - [1350, 1500]  # H2O absorption
+      - [1800, 2000]  # CO2 absorption
+    excluded_bands: []
+
+# ============================================================================
+# MODÈLE DE RECONSTRUCTION (MSI → HSI)
+# ============================================================================
+model:
+  name: "GradualExpansionUNet_residual"
+  base_channel: 64
+  in_msi: 12
+  in_hsi: 195
+  out_channels: 195
+  interpolation_mode: "bilinear"
+  activation: "silu"
+  with_batch_norm: true
+  with_mlp_spectral: false
+  final_activation: null
+  # Training info:
+  # - Loss: SAM-0.5 + MSE-0.0 + MAE-1.0
+  # - LR: 0.0002
+  # - Filtered clean normalized dataset
+
+# ============================================================================
+# MODÈLE D'INCERTITUDE (Confiance de reconstruction)
+# ============================================================================
+model_uncertainty:
+  name: "DualBranchNAFNet"
+  base_channel: 64
+  n_msi: 12
+  n_hsi: 195
+  out_channels: 31           # Incertitude: 31 canaux (pas 195!)
+  width: 64
+  middle_blk_num: 1
+  enc_blk_nums: []
+  dec_blk_nums: []
+  drop_out_rate: 0.0
+  final_activation: "softplus"
+  # Training info:
+  # - Loss: Laplace NLL
+  # - LR: 0.0003
+  # - Normalised dataset
+
+# ============================================================================
+# MODÈLE SIAMOIS (Détection de changement contrastif)
+# ============================================================================
+model_siamese:
+  name: "SiameseNetwork_heterogene"
+  in_channel_msi: 12
+  in_channel_hsi: 195
+  base_channels: 32
+  latent_dim: 64
+  # Training info:
+  # - Loss: InfoNCE pixel-wise avec masques ternaires
+  # - LR: 1e-5
+  # - Dataset: contrastif same-date MSI vs HSI
+  # - Date: 2026-09-22
+
+# ============================================================================
+# CHEMINS DES POIDS (VRAIES PATHS)
+# ============================================================================
+evaluation:
+  # Reconstruction Model
+  weights_path_reconstruction: >
+    /home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/
+    checkpoints/filtered_clean_normalised/
+    gradualexpansionunet_res_real_aug_SAM-0.5_MSE-0.0_MAE-1.0_lr-0.0002_no_mlp_residual_filtered_clean_normalised/
+    best_model.pth
+  
+  # Uncertainty Model
+  weights_path_uncertainty: >
+    /home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/
+    checkpoints/uncertainty_dualbranchnafnet_run_normalised/
+    dualbranchnafnet_ch64_laplace_nll_lr-0.0003_UNCERTAINTY/
+    best_model.pth
+  
+  # Siamese Model
+  weights_path_siamese: >
+    /home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/
+    checkpoints/contrastive_siamese_msi_hsi_64*64_msi_hsi_ur/
+    siamese_heterogene_lr1e-05_20260922_015532/
+    best_model.pth
+  
+  # Inférence settings
+  use_amp: true              # Automatic Mixed Precision (GPU)
+  batch_size: 1              # Petit batch (per-patch)
+  num_workers: 4             # DataLoader workers
+
+# ============================================================================
+# VISUALISATION
+# ============================================================================
+visualization:
+  max_samples: 6             # Nombre max de patchs par scène
+  dpi: 150                   # Résolution PNG
+  cmap_uncertainty: "hot"    # Colormap: noir (confiant) → rouge (incertain)
+  cmap_error: "YlOrRd"       # Colormap: jaune → orange → rouge
+  cmap_score: "viridis"      # Colormap: bleu → vert → jaune → blanc
+  save_npy: false            # Optionnel: sauvegarder arrays numpy
+
+# ============================================================================
+# CHEMINS DE DONNÉES
+# ============================================================================
+paths:
+  # Dataset directory (contient les scènes)
+  # Format: {dataset_dir}/{scene_name}/{scene_name}-prs.nc (HSI Before)
+  #                                   /{scene_name}-s2.nc (MSI After)
+  dataset_dir: "/mnt/data/MuMuCD_scenes"
+  
+  # Output directory (où sauvegarder les résultats)
+  output_dir: "results/change_detection_production"
+
+# ============================================================================
+# LISTE DE SCÈNES (Optionnel)
+# ============================================================================
+# Si commenté: traite TOUTES les scènes du dataset
+# Sinon: traite seulement les scènes listées
+scenes:
+  # Scènes d'entraînement (54)
+  - aranjuez
+  - arborea
+  - athens
+  - baltijsk
+  - bari
+  - beer_sheva
+  - beheira
+  - beirut
+  - belgrade
+  - binh_dai
+  - brasilia
+  - camerino
+  - cape_town
+  - codigoro
+  - copenhagen
+  - copperton
+  - cukotka
+  - dellys
+  - dubai
+  - dublin
+  - elsalto
+  - eyjafjoll
+  - fontainebleau
+  - fukushima
+  - guantanamo
+  - hanging_rock
+  - java
+  - jordan
+  - lagos
+  - london
+  - los_angeles
+  - malindi
+  - mantua
+  - mexico_city
+  - montevideo
+  - mosul
+  - mrirt
+  - muscat
+  - nagaoka
+  - new_york
+  - nicosia
+  - nouakchott
+  - novara
+  - palermo
+  - paris
+  - poinciana
+  - port_au_prince
+  - prague
+  - quito
+  - rome
+  - salinas
+  - sanaa
+  - shanghai
+  - spinazzola
+  - suez
+  - sydney
+  - tampa_bay
+  - tientsin
+  - tijuana
+  - tirana
+  - valencia
+  
+  # Scènes de validation (7)
+  - arborea
+  - athens
+  - beer_sheva
+  - istanbul
+  - los_cabos
+  - taiwan
+  - yuen_long
+  
+  # Scènes de test (8)
+  - baltijsk
+  - camerino
+  - codigoro
+  - copenhagen
+  - cullivel
+  - jagersfontein
+  - kirtland
+  - lorca
+
+# ============================================================================
+# PARAMÈTRES AVANCÉS
+# ============================================================================
+advanced:
+  seed: 42
+  deterministic: true
+  device: "cuda"             # "cuda" ou "cpu"
+  fp32: false                # Force float32 (vs float16 en AMP)
+  log_level: "INFO"
+  
+  # Inférence
+  inference:
+    verbose: true
+    save_intermediate: false # Sauvegarder rec/unc/scores séparément
+    
+  # Post-processing
+  postprocessing:
+    apply_morphology: false  # Optionnel: nettoyage morphologique
+    threshold_score: null    # Optionnel: binariser au-dessus d'un seuil
+    
+  # Memory
+  memory:
+    clear_cache_between_scenes: true
+    preload_dataset: false
+
+# ============================================================================
+# NOTES SUR LES CONFIGURATIONS
+# ============================================================================
+# 
+# ✅ Modèle Reconstruction:
+#    - Entraîné sur dataset "filtered_clean_normalised"
+#    - Loss combinée: SAM (0.5) + MAE (1.0)
+#    - Activation: SiLU (Swish)
+#    - LR: 2e-4
+#
+# ✅ Modèle Uncertainty:
+#    - Loss: Laplace NLL (aleatoric uncertainty)
+#    - Sortie: 31 canaux (pas 195!)
+#    - Activation finale: Softplus
+#    - LR: 3e-4
+#
+# ✅ Modèle Siamois:
+#    - Hétérogène: encodeurs séparés pour MSI vs HSI
+#    - Loss: InfoNCE pixel-wise
+#    - Masques ternaires: +1 (pas changement), -1 (changement), 0 (incertain)
+#    - LR: 1e-5
+#    - Entraîné sur paires same-date MSI vs HSI
+#
+# ⚠️ IMPORTANT:
+#    - is_normalised: true → données normalisées pendant inference
+#    - is_residual: true → connections résiduelles utilisées
+#    - wavelength_filtering: true → bandes atmosphériques retirées
+#
+# 🔄 Utilisation:
+#    python inference_change_detection_clean.py \
+#        --config config_inference_production.yaml \
+#        --data_dir /mnt/data/MuMuCD_scenes \
+#        --output_dir my_results
+#
+# 💾 Résultats:
+#    my_results/
+#    ├── aranjuez/change_detection_results.png
+#    ├── athens/change_detection_results.png
+#    └── ... (une scène par folder)
+#

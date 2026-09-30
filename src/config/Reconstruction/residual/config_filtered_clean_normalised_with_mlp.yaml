@@ -1,9 +1,9 @@
 experiment:
-  name: "spectral_gradual_expansion_run"
+  name: "spectral_gradual_expansion_run_all_wave_after_with_mlp_normalisation"
   seed: 42
   project: "Multimodal-change-detection"
   entity: "JfGuerrero"
-  output_dir: "checkpoints"
+  output_dir: "checkpoints/filtered_clean_normalised_mlp"
 
 model:
   name: "gradualexpansionunet_res"
@@ -12,7 +12,7 @@ model:
   activation: "silu"
   augment: true
   with_batch_norm: true
-  with_mlp_spectral: false
+  with_mlp_spectral: true
   final_activation: null
   load_model: null                 # chemin vers un .pth si reprise d'entraînement, sinon null
 
@@ -30,15 +30,15 @@ data:
   simulated: false
   augment: true                    
   augment_illumination: false       
-  is_normalised: false
+  is_normalised: true
   mask: null                       
   is_residual: true                # true pour gradualexpansionunet_res (x_init, x_interp, y)
   batch_size: 8
   num_workers: 4
-  data_dir_train: "data/patches_caches/train-after"
-  data_dir_val: "data/patches_caches/val-after"
-  data_dir_test: "data/patches_caches/test-after"
-  
+  data_dir_train: "data/patches_caches/train-clean"
+  data_dir_val: "data/patches_caches/val-clean"
+  data_dir_test: "data/patches_caches/test-clean"
+
 training:
   epochs: 100
   lr: 0.0002                       
@@ -61,5 +61,5 @@ training:
   patience_plateau: 5              # Uniquement si scheduler_type: "plateau"
 
   # Early Stopping
-  patience: 15                     
+  patience: 30                     
   min_delta: 0.0001

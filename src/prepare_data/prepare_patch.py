@@ -8,7 +8,6 @@ import xarray as xr
 
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from src.constants import CACHE_DIR, DATA_DIR, INTERP_MATRIX, SRF_MATRIX
-from src.prepare_data.dataset import SpectralDataset
 
 import json
 from pathlib import Path
@@ -300,69 +299,16 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 
 
-def create_data_loaders_spectral(
-    train_dir,
-    val_dir,
-    test_dir,
-    simulated=False,
-    augment=False,
-    augment_illumination=False,
-    batch_size=8,
-    num_workers=4,
-    is_residual=False,
-    is_normalised=False,
-    kept_indices=None,
-):
-  """Crée et renvoie les DataLoaders (train, val, test) pour les données spectrales.
+from pathlib import Path
+from torch.utils.data import DataLoader
 
-  Compatible memmap : num_workers peut être augmenté librement pour maximiser le
-  débit vers le GPU.
-  """
+# ============================================================================
+# DATALOADERS SPÉCIFIQUES & MULTI-CANAUX
+# ============================================================================
 
-  train_dataset = SpectralDataset(
-      dataset_dir=train_dir,
-      simulated=simulated,
-      is_normalised=is_normalised,
-      augment=augment,
-      augment_illumination=augment_illumination,
-      is_residual=is_residual,
-      kept_indices=kept_indices,
-  )
 
-  val_dataset = SpectralDataset(
-      dataset_dir=val_dir,
-      simulated=simulated,
-      is_normalised=is_normalised,
-      augment=False,
-      augment_illumination=False,
-      is_residual=is_residual,
-      kept_indices=kept_indices,
-  )
 
-  test_dataset = SpectralDataset(
-      dataset_dir=test_dir,
-      simulated=simulated,
-      is_normalised=is_normalised,
-      augment=False,
-      augment_illumination=False,
-      is_residual=is_residual,
-      kept_indices=kept_indices,
-  )
-
-  # Configuration optimisée pour memmap (multi-worker débloqué)
-  loader_kwargs = {
-      "batch_size": batch_size,
-      "num_workers": num_workers,
-      "pin_memory": True,
-      "persistent_workers": num_workers > 0,
-  }
-
-  return (
-      DataLoader(train_dataset, shuffle=True, **loader_kwargs),
-      DataLoader(val_dataset, shuffle=False, **loader_kwargs),
-      DataLoader(test_dataset, shuffle=False, **loader_kwargs),
-  )
-
+    
 TEST_SCENES= ["baltijsk", "camerino", "codigoro", "copenhagen", "cullivel", "jagersfontein", "kirtland", "lorca"]
 VAL_SCENES = ["arborea", "athens", "beer_sheva", "istanbul", "los_cabos", "taiwan", "yuen_long"]
 TRAIN_SCENES= [
@@ -624,17 +570,3 @@ if __name__=="__main__":
     #prepare_mumucd_single_file(TEST_SCENES_1, "test-clean", blacklist_patches=BLACKLIST_PATCHES, patch_size=256,num_workers=3, output_dir=CACHE_DIR)
     #prepare_mumucd_single_file(TRAIN_SCENES_1, "train-clean", blacklist_patches=BLACKLIST_PATCHES, patch_size=256,num_workers=3, output_dir=CACHE_DIR)
  
-"""
-# Ouvre un fichier et vois la config
-    f = h5py.File("/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/patches_caches/test-after/hsi_interp.h5", "r")
-    print(f"Compression: {f['data'].compression}")
-    print(f"Chunks: {f['data'].chunks}")
-    print(f"Shape: {f['data'].shape}")
-
-# Teste une lecture
-    start = time.time()
-    data = f['data'][0]  # Lis JUSTE le premier patch
-    print(f"Temps lecture 1 patch: {time.time()-start:.2f}s")
-
-    f.close()
-"""

@@ -1,0 +1,67 @@
+# ============================================================================
+# CONFIGURATION D'ENTRAÎNEMENT - SIAMOIS HÉTÉROGÈNE (100% CONTRASTIF)
+# ============================================================================
+
+experiment:
+  name: "spectral_contrastive_siamese3"
+  seed: 42
+  project: "Multimodal-change-detection"
+  entity: "JfGuerrero"
+  output_dir: "checkpoints/contrastive_siamese_64*64_msi_hsi_ur"
+
+model:
+  name: "siamese_heterogene"
+  base_channels: 32               # Note : 'base_channels' (pluriel) attendu par le script
+  latent_dim: 32                  # Dimension de l'espace latent partagé
+  load_model: null                 # Chemin vers un .pth si reprise d'entraînement, sinon null
+
+# Configuration du filtrage des longueurs d'onde
+wavelength_filtering:
+  enabled: true
+  excluded_windows:
+    - [1350, 1500]
+    - [1800, 2000]
+  excluded_bands: []
+
+data:
+  augmentation: true
+  batch_size: 16
+  num_workers: 4
+  patch_size: 64
+  data_dir_train: "data/patches_caches/train-contrastive1/train-clean"
+  data_dir_val: "data/patches_caches/val-contrastive1/val-clean"
+  data_dir_test: "data/patches_caches/test-contrastive1/test-clean"
+
+training:
+  epochs: 50
+  lr: 0.00001                       
+  
+  # Optimiseur
+  optimizer: "adamw"               # Clé standard lue par build_optimizer
+  optimizer_name: "adamw"          # Compatibilité avec vos utilitaires existants
+  weight_decay: 0.01               
+  
+  # Configuration du Scheduler
+  warm_up: true                    
+  warmup_epochs: 3                 
+  scheduler: "cosine"              # Clé standard lue par build_lr_scheduler
+  scheduler_type: "cosine_restarts" 
+  scheduler_params:
+    T_max: 100
+    eta_min: 0.000001
+  T_0: 50                          
+  eta_min: 0.000001                
+
+  # ========================================================================
+  # PARAMÈTRES SPÉCIFIQUES CONTRASTIF (InfoNCE)
+  # ========================================================================
+  temperature: 0.1                # Température pour InfoNCE (0.05 à 0.1)
+  similarity_log_interval: 1       # Fréquence de log de la heatmap sur WandB (en epochs)
+  use_amp: true                    # Précision mixte sur GPU
+
+  # Early Stopping
+  early_stopping_patience: 20      
+  early_stopping_min_delta: 0.00001 
+  early_stopping_start_epoch: 10
+  patience: 60                   
+  min_delta: 0.00001

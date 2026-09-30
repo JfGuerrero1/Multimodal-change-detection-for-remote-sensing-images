@@ -82,3 +82,16 @@ def get_spectral_mask(wvl):
     for low, high in ATMOSPHERIC_WINDOWS:
         mask &= ~((wvl >= low) & (wvl <= high))
     return mask
+
+
+import numpy as np
+
+# Si ton fichier est un .npy sauvegardé :
+data = np.load('/home/ids/jfguerrero/Multimodal-change-detection-for-remote-sensing-images/data/mumucd/srf_matrix_norm_s2b.npy')
+
+print("Forme de la matrice :", data.shape)  # Doit afficher (230, 12)
+print("Min / Max :", np.min(data), np.max(data))
+
+# Pour vérifier si une bande a des plateaux suspects (valeurs constantes sur plusieurs indices) :
+for i in range(data.shape[1]):
+    print(f"Bande {i}: min={data[:, i].min():.4f}, max={data[:, i].max():.4f}")
